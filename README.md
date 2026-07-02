@@ -1,5 +1,7 @@
 # SpriteMaker PySide
 
+[繁體中文 README](README.zh-TW.md)
+
 SpriteMaker PySide is a local desktop sprite editor rebuilt with Python and PySide6.
 It was created to replace a large single-file HTML workflow with a faster desktop app that can use local memory, threaded batch processing, and native windows.
 
