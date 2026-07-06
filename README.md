@@ -7,6 +7,8 @@ It was created to replace a large single-file HTML workflow with a faster deskto
 
 ## Features
 
+- Startup screen for choosing video import or the editor workflow.
+- Video import workflow with start/end time, target FPS extraction, frame picking, PNG export, and import into the editor.
 - Import PNG/JPG images as animation frames.
 - Frame timeline with copy, delete, previous/next frame controls, and drag reordering.
 - Layer dock with visibility, opacity, active layer switching, and reopenable layer window.
@@ -56,6 +58,7 @@ It was created to replace a large single-file HTML workflow with a faster deskto
 - NumPy
 - Pillow
 - PyInstaller, only needed when building an exe
+- OpenCV, used for video frame extraction
 
 Install dependencies:
 

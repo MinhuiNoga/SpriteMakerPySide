@@ -38,7 +38,9 @@ from PySide6.QtWidgets import (
 )
 
 from .image_ops import add_outline, erase_color, qcolor_to_rgba, trim_alpha_edges
-from .models import Frame, Layer, clone_image, frame_from_image, make_blank_image
+from .models import Frame, Layer, clone_image, frame_from_image, frame_from_qimage, make_blank_image
+from .startup_dialog import StartupDialog
+from .video_import_dialog import VideoImportDialog
 from .widgets import CanvasWidget, FrameStripWidget
 from .workers import UniversalEraseWorker
 
@@ -198,6 +200,7 @@ class MainWindow(QMainWindow):
         self.add_menu_action(file_menu, "匯入", self.import_images, "Ctrl+O")
         self.add_menu_action(file_menu, "插入", self.insert_images, "Ctrl+I")
         self.add_menu_action(file_menu, "清空", self.clear_project)
+        self.add_menu_action(file_menu, "匯入影片", self.import_video)
         file_menu.addSeparator()
         self.add_menu_action(file_menu, "儲存單幀", self.export_current_frame, "Ctrl+S")
         self.add_menu_action(file_menu, "儲存ZIP", self.export_zip)
@@ -420,6 +423,29 @@ class MainWindow(QMainWindow):
             self.frames[insert_at:insert_at] = new_frames
             self.current_index = insert_at
         self.after_project_changed("已插入影格")
+
+    def import_video(self) -> None:
+        dialog = VideoImportDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.add_video_frames(dialog.import_images)
+
+    def add_video_frames(self, images: List[QImage]) -> None:
+        if not images:
+            return
+        new_frames = [frame_from_qimage(image, f"video_frame_{index:04d}.png") for index, image in enumerate(images, 1)]
+        if self.frames:
+            self.push_undo()
+            insert_at = self.current_index + 1
+            self.frames[insert_at:insert_at] = new_frames
+            self.current_index = insert_at
+        else:
+            self.frames = new_frames
+            self.current_index = 0
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self._export_size_initialized = False
+        self.after_project_changed(f"已匯入 {len(new_frames)} 張影片影格")
 
     def pick_images(self) -> List[Path]:
         files, _ = QFileDialog.getOpenFileNames(
@@ -1127,6 +1153,11 @@ class SpritesheetPreviewDialog(QDialog):
 def run() -> int:
     app = QApplication([])
     app.setApplicationName("Sprite Maker PySide")
+    startup = StartupDialog()
+    if startup.exec() != QDialog.DialogCode.Accepted:
+        return 0
     win = MainWindow()
     win.show()
+    if startup.choice == StartupDialog.VIDEO:
+        QTimer.singleShot(0, win.import_video)
     return app.exec()

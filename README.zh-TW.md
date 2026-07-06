@@ -5,6 +5,8 @@ SpriteMaker PySide 是一款以 Python + PySide6 製作的本地桌面版 sprite
 
 ## 功能特色
 
+- 啟動 EXE 後可選擇「匯入影片」或「進入編輯模式」。
+- 影片匯入流程支援開始/結束時間、目標 FPS 擷取、挑選 frame、儲存 PNG，或匯入原本編輯器。
 - 匯入 PNG/JPG 圖片作為動畫影格。
 - 下方影格列支援複製、刪除、上一幀/下一幀與拖曳排序。
 - 圖層視窗支援顯示/隱藏、不透明度、作用中圖層切換，關閉後可再次開啟。
@@ -54,6 +56,7 @@ SpriteMaker PySide 是一款以 Python + PySide6 製作的本地桌面版 sprite
 - NumPy
 - Pillow
 - PyInstaller，只有打包 exe 時需要
+- OpenCV，用於影片 frame 擷取
 
 安裝依賴：
 

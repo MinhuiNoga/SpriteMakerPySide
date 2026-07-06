@@ -102,3 +102,12 @@ def frame_from_image(path: Path) -> Frame:
         active_layer_index=0,
         source_path=path,
     )
+
+
+def frame_from_qimage(image: QImage, name: str, source_path: Optional[Path] = None) -> Frame:
+    return Frame(
+        name=name,
+        layers=[Layer("Layer 1", image.convertToFormat(RGBA_FORMAT))],
+        active_layer_index=0,
+        source_path=source_path,
+    )
