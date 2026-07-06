@@ -428,6 +428,8 @@ class MainWindow(QMainWindow):
         dialog = VideoImportDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        if dialog.switch_to_editor:
+            return
         self.add_video_frames(dialog.import_images)
 
     def add_video_frames(self, images: List[QImage]) -> None:
@@ -1156,8 +1158,15 @@ def run() -> int:
     startup = StartupDialog()
     if startup.exec() != QDialog.DialogCode.Accepted:
         return 0
+    if startup.choice == StartupDialog.VIDEO:
+        video_dialog = VideoImportDialog(show_switch_button=True)
+        if video_dialog.exec() != QDialog.DialogCode.Accepted:
+            return 0
+        win = MainWindow()
+        win.show()
+        if video_dialog.import_images:
+            win.add_video_frames(video_dialog.import_images)
+        return app.exec()
     win = MainWindow()
     win.show()
-    if startup.choice == StartupDialog.VIDEO:
-        QTimer.singleShot(0, win.import_video)
     return app.exec()
