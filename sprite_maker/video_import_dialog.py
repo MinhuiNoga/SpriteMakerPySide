@@ -5,8 +5,8 @@ from typing import List, Optional
 import zipfile
 
 import cv2
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QObject, QPointF, QRectF, QRunnable, Qt, QThreadPool, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QIcon, QImage, QMouseEvent, QPainter, QPen, QPixmap
+from PySide6.QtCore import QByteArray, QBuffer, QEvent, QIODevice, QObject, QPointF, QRectF, QRunnable, Qt, QThreadPool, QTimer, Signal, Slot
+from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent, QIcon, QImage, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -30,6 +30,9 @@ from PySide6.QtWidgets import (
 )
 
 from .video_ops import ExtractedVideoFrame, VideoMetadata, cv_frame_to_qimage, extract_video_frames, read_video_metadata
+
+
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv"}
 
 
 def format_seconds(value: float) -> str:
@@ -398,6 +401,71 @@ class VideoImportDialog(QDialog):
         layout.addWidget(self.progress)
         layout.addLayout(button_row)
         self.update_page_buttons()
+        self.enable_video_drop()
+
+    def enable_video_drop(self) -> None:
+        for widget in [self, *self.findChildren(QWidget)]:
+            widget.setAcceptDrops(True)
+            widget.installEventFilter(self)
+
+    def eventFilter(self, watched, event) -> bool:
+        if event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+            if self.dropped_video_path(event) is not None:
+                event.acceptProposedAction()
+                return True
+        if event.type() == QEvent.Type.Drop:
+            path = self.dropped_video_path(event)
+            if path is not None:
+                event.acceptProposedAction()
+                QTimer.singleShot(0, lambda p=path: self.load_dropped_video(p))
+                return True
+        return super().eventFilter(watched, event)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if self.dropped_video_path(event) is not None:
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        if self.dropped_video_path(event) is not None:
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        path = self.dropped_video_path(event)
+        if path is not None:
+            event.acceptProposedAction()
+            QTimer.singleShot(0, lambda p=path: self.load_dropped_video(p))
+            return
+        super().dropEvent(event)
+
+    def dropped_video_path(self, event) -> Optional[Path]:
+        mime_data = event.mimeData()
+        if mime_data is None or not mime_data.hasUrls():
+            return None
+        for url in mime_data.urls():
+            if not url.isLocalFile():
+                continue
+            path = Path(url.toLocalFile())
+            if path.suffix.lower() in VIDEO_EXTENSIONS:
+                return path
+        return None
+
+    def load_dropped_video(self, path: Path) -> None:
+        self.stop_frame_animation()
+        self.frames = []
+        self.import_images = []
+        self.frame_list.clear()
+        self.frame_preview.setText("尚未擷取 frame")
+        self.animation_preview.setText("已勾選 frame 的動畫預覽")
+        self.animation_info.setText("尚未播放")
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.pages.setCurrentWidget(self.video_page)
+        self.update_page_buttons()
+        self.load_video(path)
 
     def _build_video_page(self) -> QWidget:
         page = QWidget()
@@ -583,12 +651,15 @@ class VideoImportDialog(QDialog):
         )
         if not path:
             return
+        self.load_video(Path(path))
+
+    def load_video(self, path: Path) -> bool:
         try:
-            self.metadata = read_video_metadata(Path(path))
+            self.metadata = read_video_metadata(path)
         except ValueError as exc:
             QMessageBox.warning(self, "無法讀取影片", str(exc))
-            return
-        self.video_path = Path(path)
+            return False
+        self.video_path = path
         self.path_label.setText(str(self.video_path))
         duration = max(0.001, self.metadata.duration)
         self.range_slider.setDuration(duration)
@@ -606,6 +677,7 @@ class VideoImportDialog(QDialog):
             f"{self.metadata.duration:.3f} 秒"
         )
         self.start_video_preview()
+        return True
 
     def start_video_preview(self) -> None:
         self.stop_video_preview()

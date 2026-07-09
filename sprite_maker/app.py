@@ -2,18 +2,20 @@ from __future__ import annotations
 
 import io
 import math
+import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import QSize, Qt, QThreadPool, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QImage, QKeySequence, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QSize, Qt, QThreadPool, QTimer
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDragEnterEvent, QDropEvent, QIcon, QImage, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QColorDialog,
     QDialog,
+    QDoubleSpinBox,
     QDockWidget,
     QFileDialog,
     QFormLayout,
@@ -43,6 +45,18 @@ from .startup_dialog import StartupDialog
 from .video_import_dialog import VideoImportDialog
 from .widgets import CanvasWidget, FrameStripWidget
 from .workers import UniversalEraseWorker
+
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv"}
+
+
+def natural_sort_key(path: Path) -> List[object]:
+    return [int(part) if part.isdigit() else part.casefold() for part in re.split(r"(\d+)", path.name)]
+
+
+def sort_image_paths(paths: List[Path]) -> List[Path]:
+    return sorted(paths, key=natural_sort_key)
 
 
 @dataclass
@@ -188,6 +202,7 @@ class MainWindow(QMainWindow):
 
         self.create_docks()
         self.create_toolbar()
+        self.enable_file_drop()
         self.update_ui()
         self.update_canvas_extent()
 
@@ -390,6 +405,83 @@ class MainWindow(QMainWindow):
             self.frame_dock.show()
             self.frame_dock.raise_()
 
+    def enable_file_drop(self) -> None:
+        widgets = [
+            self,
+            self.scroll,
+            self.scroll.viewport(),
+            self.canvas,
+            self.thumbnails,
+            self.layers,
+        ]
+        for widget in widgets:
+            widget.setAcceptDrops(True)
+            widget.installEventFilter(self)
+
+    def eventFilter(self, watched, event) -> bool:
+        if event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+            if self.is_supported_file_drop(event):
+                event.acceptProposedAction()
+                return True
+        if event.type() == QEvent.Type.Drop:
+            paths = self.paths_from_drop_event(event)
+            if paths:
+                event.acceptProposedAction()
+                self.queue_dropped_files(paths)
+                return True
+        return super().eventFilter(watched, event)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if self.is_supported_file_drop(event):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:
+        if self.is_supported_file_drop(event):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        paths = self.paths_from_drop_event(event)
+        if paths:
+            event.acceptProposedAction()
+            self.queue_dropped_files(paths)
+            return
+        super().dropEvent(event)
+
+    def is_supported_file_drop(self, event) -> bool:
+        return bool(self.supported_drop_paths(event.mimeData()))
+
+    def paths_from_drop_event(self, event) -> List[Path]:
+        return self.supported_drop_paths(event.mimeData())
+
+    def supported_drop_paths(self, mime_data) -> List[Path]:
+        if mime_data is None or not mime_data.hasUrls():
+            return []
+        paths: List[Path] = []
+        for url in mime_data.urls():
+            if not url.isLocalFile():
+                continue
+            path = Path(url.toLocalFile())
+            if path.suffix.lower() in IMAGE_EXTENSIONS | VIDEO_EXTENSIONS:
+                paths.append(path)
+        return paths
+
+    def handle_dropped_files(self, paths: List[Path]) -> None:
+        image_paths = [path for path in paths if path.suffix.lower() in IMAGE_EXTENSIONS]
+        video_paths = [path for path in paths if path.suffix.lower() in VIDEO_EXTENSIONS]
+        if image_paths:
+            self.append_image_frames(image_paths)
+        for video_path in video_paths:
+            self.import_video_from_path(video_path)
+
+    def queue_dropped_files(self, paths: List[Path]) -> None:
+        queued_paths = list(paths)
+        if queued_paths:
+            QTimer.singleShot(0, lambda: self.handle_dropped_files(queued_paths))
+
     @property
     def current_frame(self) -> Optional[Frame]:
         if not self.frames:
@@ -426,11 +518,37 @@ class MainWindow(QMainWindow):
 
     def import_video(self) -> None:
         dialog = VideoImportDialog(self)
+        self.run_video_import_dialog(dialog)
+
+    def import_video_from_path(self, path: Path) -> None:
+        dialog = VideoImportDialog(self)
+        if not dialog.load_video(path):
+            return
+        self.run_video_import_dialog(dialog)
+
+    def run_video_import_dialog(self, dialog: VideoImportDialog) -> None:
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         if dialog.switch_to_editor:
             return
         self.add_video_frames(dialog.import_images)
+
+    def append_image_frames(self, paths: List[Path]) -> None:
+        new_frames = self.load_frames(paths)
+        if not new_frames:
+            return
+        if self.frames:
+            self.push_undo()
+            insert_at = len(self.frames)
+            self.frames.extend(new_frames)
+            self.current_index = insert_at
+        else:
+            self.frames = new_frames
+            self.current_index = 0
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self._export_size_initialized = False
+        self.after_project_changed(f"已拖放匯入 {len(new_frames)} 張圖片")
 
     def add_video_frames(self, images: List[QImage]) -> None:
         if not images:
@@ -438,8 +556,8 @@ class MainWindow(QMainWindow):
         new_frames = [frame_from_qimage(image, f"video_frame_{index:04d}.png") for index, image in enumerate(images, 1)]
         if self.frames:
             self.push_undo()
-            insert_at = self.current_index + 1
-            self.frames[insert_at:insert_at] = new_frames
+            insert_at = len(self.frames)
+            self.frames.extend(new_frames)
             self.current_index = insert_at
         else:
             self.frames = new_frames
@@ -460,7 +578,7 @@ class MainWindow(QMainWindow):
 
     def load_frames(self, paths: List[Path]) -> List[Frame]:
         frames = []
-        for path in paths:
+        for path in sort_image_paths(paths):
             try:
                 frames.append(frame_from_image(path))
             except ValueError as exc:
@@ -908,15 +1026,27 @@ class AnimationDialog(QWidget):
         self.frames = frames
         self.index = 0
         self.preview_zoom = 1.0
+        self._syncing_frame_list = False
         self.label = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self.label.setMinimumSize(420, 320)
         self.label.setStyleSheet("background:#666;")
         self.preview_scroll = QScrollArea()
         self.preview_scroll.setWidgetResizable(False)
         self.preview_scroll.setWidget(self.label)
-        self.speed = QSpinBox()
-        self.speed.setRange(20, 1000)
-        self.speed.setValue(120)
+        self.frame_list = QListWidget()
+        self.frame_list.setViewMode(QListWidget.ViewMode.ListMode)
+        self.frame_list.setIconSize(QSize(72, 72))
+        self.frame_list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.frame_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.frame_list.setMinimumWidth(170)
+        self.frame_list.setMaximumWidth(260)
+        self.frame_list.currentRowChanged.connect(self.preview_frame_from_list)
+        self.fps_spin = QDoubleSpinBox()
+        self.fps_spin.setRange(0.1, 60.0)
+        self.fps_spin.setValue(24.0)
+        self.fps_spin.setDecimals(2)
+        self.fps_spin.setSingleStep(1.0)
+        self.fps_spin.setSuffix(" FPS")
         self.start_frame = QSpinBox()
         self.start_frame.setRange(1, len(frames))
         self.start_frame.setValue(1)
@@ -930,10 +1060,23 @@ class AnimationDialog(QWidget):
         self.timer.timeout.connect(self.next)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.preview_scroll, 1)
+        preview_row = QHBoxLayout()
+        preview_row.addWidget(self.preview_scroll, 1)
+        thumbnail_panel = QWidget()
+        thumbnail_layout = QVBoxLayout(thumbnail_panel)
+        thumbnail_layout.addWidget(QLabel("所有 frame"))
+        thumbnail_layout.addWidget(self.frame_list, 1)
+        set_start_button = QPushButton("設為開始")
+        set_start_button.clicked.connect(self.set_selected_frame_as_start)
+        set_end_button = QPushButton("設為結束")
+        set_end_button.clicked.connect(self.set_selected_frame_as_end)
+        thumbnail_layout.addWidget(set_start_button)
+        thumbnail_layout.addWidget(set_end_button)
+        preview_row.addWidget(thumbnail_panel)
+        layout.addLayout(preview_row, 1)
         row = QHBoxLayout()
-        row.addWidget(QLabel("間隔(ms)"))
-        row.addWidget(self.speed)
+        row.addWidget(QLabel("播放 FPS"))
+        row.addWidget(self.fps_spin)
         row.addWidget(QLabel("播放"))
         row.addWidget(self.start_frame)
         row.addWidget(QLabel("到"))
@@ -949,13 +1092,51 @@ class AnimationDialog(QWidget):
         zoom_row.addWidget(self.zoom_label)
         layout.addLayout(zoom_row)
 
-        self.speed.valueChanged.connect(lambda value: self.timer.setInterval(value))
+        self.fps_spin.valueChanged.connect(self.update_timer_interval)
         self.start_frame.valueChanged.connect(self.normalize_range)
         self.end_frame.valueChanged.connect(self.normalize_range)
         self.zoom_slider.valueChanged.connect(self.set_preview_zoom)
-        self.timer.setInterval(self.speed.value())
+        self.populate_frame_thumbnails()
+        self.update_timer_interval()
         self.timer.start()
         self.draw()
+
+    def update_timer_interval(self) -> None:
+        interval = max(16, round(1000 / max(0.1, self.fps_spin.value())))
+        self.timer.setInterval(interval)
+
+    def populate_frame_thumbnails(self) -> None:
+        self.frame_list.blockSignals(True)
+        self.frame_list.clear()
+        for index, frame in enumerate(self.frames):
+            pixmap = QPixmap.fromImage(frame.composite()).scaled(
+                self.frame_list.iconSize(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.FastTransformation,
+            )
+            item = QListWidgetItem(QIcon(pixmap), str(index + 1))
+            item.setToolTip(frame.name)
+            self.frame_list.addItem(item)
+        self.frame_list.setCurrentRow(self.index)
+        self.frame_list.blockSignals(False)
+
+    def preview_frame_from_list(self, row: int) -> None:
+        if self._syncing_frame_list or row < 0 or row >= len(self.frames):
+            return
+        self.index = row
+        self.draw()
+
+    def set_selected_frame_as_start(self) -> None:
+        row = self.frame_list.currentRow()
+        if row < 0:
+            return
+        self.start_frame.setValue(row + 1)
+
+    def set_selected_frame_as_end(self) -> None:
+        row = self.frame_list.currentRow()
+        if row < 0:
+            return
+        self.end_frame.setValue(row + 1)
 
     def toggle(self) -> None:
         if self.timer.isActive():
@@ -986,6 +1167,13 @@ class AnimationDialog(QWidget):
             )
         self.label.setPixmap(pixmap)
         self.label.resize(pixmap.size())
+        if hasattr(self, "frame_list"):
+            self._syncing_frame_list = True
+            self.frame_list.setCurrentRow(self.index)
+            current_item = self.frame_list.currentItem()
+            if current_item is not None:
+                self.frame_list.scrollToItem(current_item)
+            self._syncing_frame_list = False
 
     def normalize_range(self) -> None:
         if self.start_frame.value() > self.end_frame.value():
