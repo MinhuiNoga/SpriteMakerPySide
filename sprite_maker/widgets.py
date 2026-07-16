@@ -133,6 +133,7 @@ class CanvasWidget(QWidget):
         self.bg_color = QColor("#808080")
         self.show_checker_bg = True
         self.export_size: Optional[QSize] = None
+        self.debug_overlay_image: Optional[QImage] = None
         self._drawing = False
         self._last_pos: Optional[QPoint] = None
         self._hover_pos: Optional[QPoint] = None
@@ -170,6 +171,7 @@ class CanvasWidget(QWidget):
         self.floating_image = None
         self.selection_rect = None
         self.lasso_points = []
+        self.debug_overlay_image = None
         self.updateGeometry()
         self.update()
 
@@ -189,6 +191,10 @@ class CanvasWidget(QWidget):
     def set_export_size(self, size: Optional[QSize]) -> None:
         self.export_size = size
         self.updateGeometry()
+        self.update()
+
+    def set_debug_overlay(self, image: Optional[QImage]) -> None:
+        self.debug_overlay_image = image.copy() if image is not None and not image.isNull() else None
         self.update()
 
     def sizeHint(self):
@@ -236,6 +242,8 @@ class CanvasWidget(QWidget):
         painter.drawRect(output_rect)
         painter.restore()
         painter.drawImage(self._image_rect, image)
+        if self.debug_overlay_image is not None and not self.debug_overlay_image.isNull():
+            painter.drawImage(self._image_rect, self.debug_overlay_image)
         self._paint_floating_selection(painter)
         self._paint_selection_overlay(painter)
         self._paint_brush_preview(painter)
@@ -319,8 +327,19 @@ class CanvasWidget(QWidget):
             self.commit_floating_selection()
             self.editing_started.emit()
             layer = self.frame.active_layer
-            layer.image = flood_fill(layer.image, pos.x(), pos.y(), self.color, self.tolerance)
-            self._finish_edit("已填色")
+            if len(self.lasso_points) >= 3 and self._point_in_selection(pos):
+                self._fill_lasso_selection(layer.image)
+                self._finish_edit("已填滿繩索選取")
+            else:
+                layer.image = flood_fill(
+                    layer.image,
+                    pos.x(),
+                    pos.y(),
+                    self.color,
+                    self.tolerance,
+                    self.selection_mask_image(),
+                )
+                self._finish_edit("已填色")
         elif self.tool == "wand":
             self.commit_floating_selection()
             self.editing_started.emit()
@@ -489,6 +508,13 @@ class CanvasWidget(QWidget):
         self.frame.mark_dirty()
         self.update()
 
+    def _fill_lasso_selection(self, image: QImage) -> None:
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        painter.fillPath(self._lasso_path(QPoint(0, 0)), self.color)
+        painter.end()
+
     def copy_selection(self) -> bool:
         image = self._selection_to_image()
         if image is None:
@@ -585,6 +611,29 @@ class CanvasWidget(QWidget):
         self.selection_rect = None
         self.lasso_points = []
         self.update()
+
+    def has_active_selection(self) -> bool:
+        return (
+            self.selection_rect is not None and not self.selection_rect.isNull()
+        ) or len(self.lasso_points) >= 3
+
+    def selection_mask_image(self) -> Optional[QImage]:
+        """Return the rectangular or lasso selection as an image-sized mask."""
+        if not self.frame or not self.has_active_selection():
+            return None
+
+        mask = QImage(self.frame.width, self.frame.height, QImage.Format.Format_RGBA8888)
+        mask.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(mask)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 255))
+        if len(self.lasso_points) >= 3:
+            painter.drawPath(self._lasso_path(QPoint(0, 0)))
+        elif self.selection_rect is not None:
+            painter.drawRect(self._selection_bounds())
+        painter.end()
+        return mask
 
     def delete_selection(self) -> bool:
         if self.floating_image is not None:

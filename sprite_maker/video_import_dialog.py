@@ -326,7 +326,12 @@ class VideoExtractWorker(QRunnable):
 
 
 class VideoImportDialog(QDialog):
-    def __init__(self, parent=None, show_switch_button: bool = False) -> None:
+    def __init__(
+        self,
+        parent=None,
+        show_switch_button: bool = False,
+        initial_directory: Optional[Path] = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("匯入影片")
         self.setWindowFlags(
@@ -346,6 +351,7 @@ class VideoImportDialog(QDialog):
         self.preview_capture = None
         self.current_video_image: Optional[QImage] = None
         self.switch_to_editor = False
+        self.initial_directory = initial_directory or Path.home()
         self._syncing_range = False
         self.preview_playing = False
         self.animation_index = 0
@@ -646,7 +652,7 @@ class VideoImportDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "選擇影片",
-            str(Path.home()),
+            str(self.video_path.parent if self.video_path is not None else self.initial_directory),
             "Videos (*.mp4 *.mov *.avi *.webm *.mkv);;All Files (*.*)",
         )
         if not path:
@@ -660,6 +666,7 @@ class VideoImportDialog(QDialog):
             QMessageBox.warning(self, "無法讀取影片", str(exc))
             return False
         self.video_path = path
+        self.initial_directory = path.parent
         self.path_label.setText(str(self.video_path))
         duration = max(0.001, self.metadata.duration)
         self.range_slider.setDuration(duration)
@@ -1030,7 +1037,8 @@ class VideoImportDialog(QDialog):
         if not selected:
             QMessageBox.information(self, "沒有選擇 frame", "請先勾選至少一個 frame。")
             return
-        directory = QFileDialog.getExistingDirectory(self, "選擇儲存資料夾", str(Path.home()))
+        default_directory = self.video_path.parent if self.video_path is not None else self.initial_directory
+        directory = QFileDialog.getExistingDirectory(self, "選擇儲存資料夾", str(default_directory))
         if not directory:
             return
         output_dir = Path(directory)

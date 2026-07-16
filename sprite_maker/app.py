@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QColorDialog,
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QDockWidget,
@@ -39,7 +40,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .image_ops import add_outline, erase_color, qcolor_to_rgba, trim_alpha_edges
+from .image_ops import add_outline, applyColorSpillCleanupToImageData, erase_color, qcolor_to_rgba, trim_alpha_edges
 from .models import Frame, Layer, clone_image, frame_from_image, frame_from_qimage, make_blank_image
 from .startup_dialog import StartupDialog
 from .video_import_dialog import VideoImportDialog
@@ -159,11 +160,14 @@ class MainWindow(QMainWindow):
         self.color = QColor("#ff0000")
         self.tool_actions = {}
         self._export_size_initialized = False
+        self.last_import_directory: Optional[Path] = None
         self.layer_dock: Optional[QDockWidget] = None
         self.frame_dock: Optional[QDockWidget] = None
+        self.spill_cleanup_dock: Optional[QDockWidget] = None
         self._thumb_timer = QTimer(self)
         self._thumb_timer.setSingleShot(True)
         self._thumb_timer.timeout.connect(self.refresh_thumbnails)
+        self.last_spill_debug_stats: Optional[dict] = None
 
         self.canvas = CanvasWidget()
         self.canvas.editing_started.connect(self.push_undo)
@@ -317,6 +321,7 @@ class MainWindow(QMainWindow):
         output_toolbar.addSeparator()
         self.add_action(output_toolbar, "圖層視窗", self.show_layer_dock)
         self.add_action(output_toolbar, "影格視窗", self.show_frame_dock)
+        self.add_action(output_toolbar, "融色面板", self.show_spill_cleanup_dock)
         output_toolbar.addSeparator()
         self.add_action(output_toolbar, "縮放+", lambda: self.canvas.set_zoom(self.canvas.zoom + 0.25), "Ctrl++")
         self.add_action(output_toolbar, "縮放-", lambda: self.canvas.set_zoom(self.canvas.zoom - 0.25), "Ctrl+-")
@@ -375,6 +380,86 @@ class MainWindow(QMainWindow):
         self.layer_dock.setWidget(layer_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.layer_dock)
 
+        spill_panel = QWidget()
+        spill_layout = QFormLayout(spill_panel)
+        self.spill_color_label = QLabel()
+        self.spill_color_label.setToolTip("沿用工具列目前選取顏色，不另外建立色票")
+        spill_layout.addRow("參考色", self.spill_color_label)
+        self.spill_tolerance_label = QLabel()
+        self.spill_tolerance_label.setToolTip("沿用工具列既有容差設定")
+        spill_layout.addRow("容差", self.spill_tolerance_label)
+
+        self.spill_strength_spin = QDoubleSpinBox()
+        self.spill_strength_spin.setRange(0.0, 1.0)
+        self.spill_strength_spin.setSingleStep(0.05)
+        self.spill_strength_spin.setDecimals(2)
+        self.spill_strength_spin.setValue(0.8)
+        spill_layout.addRow("修復強度", self.spill_strength_spin)
+
+        self.spill_edge_width_spin = QSpinBox()
+        self.spill_edge_width_spin.setRange(1, 10)
+        self.spill_edge_width_spin.setValue(3)
+        spill_layout.addRow("邊緣寬度 px", self.spill_edge_width_spin)
+
+        self.spill_erode_spin = QSpinBox()
+        self.spill_erode_spin.setRange(0, 3)
+        self.spill_erode_spin.setValue(0)
+        spill_layout.addRow("Alpha 收縮 px", self.spill_erode_spin)
+
+        self.spill_feather_spin = QSpinBox()
+        self.spill_feather_spin.setRange(0, 3)
+        self.spill_feather_spin.setValue(0)
+        spill_layout.addRow("邊緣柔化 px", self.spill_feather_spin)
+
+        self.spill_bleed_toggle = QCheckBox("啟用邊緣補色")
+        self.spill_bleed_toggle.setChecked(True)
+        spill_layout.addRow("", self.spill_bleed_toggle)
+
+        self.spill_scope_combo = QComboBox()
+        self.spill_scope_combo.addItem("目前選取圖層", "layer")
+        self.spill_scope_combo.addItem("目前幀所有圖層", "frame")
+        self.spill_scope_combo.addItem("所有幀所有圖層", "all")
+        spill_layout.addRow("套用範圍", self.spill_scope_combo)
+
+        spill_hint = QLabel("使用目前選取顏色作為殘邊污染色")
+        spill_hint.setWordWrap(True)
+        spill_layout.addRow("", spill_hint)
+
+        spill_button = QPushButton("套用邊緣融色修復")
+        spill_button.clicked.connect(self.apply_color_spill_cleanup)
+        spill_layout.addRow("", spill_button)
+
+        self.spill_debug_overlay_toggle = QCheckBox("顯示 Debug Overlay")
+        spill_layout.addRow("Debug", self.spill_debug_overlay_toggle)
+        self.spill_debug_overlay_combo = QComboBox()
+        for label, value in (
+            ("innerEdgeBand", "innerEdgeBand"),
+            ("outerPaddingBand", "outerPaddingBand"),
+            ("semiTransparentBand", "semiTransparentBand"),
+            ("contaminatedMask", "contaminatedMask"),
+            ("lookupFallback", "lookupFallback"),
+            ("actualChangedPixels", "actualChangedPixels"),
+            ("allDebugMasks", "allDebugMasks"),
+        ):
+            self.spill_debug_overlay_combo.addItem(label, value)
+        spill_layout.addRow("Overlay 類型", self.spill_debug_overlay_combo)
+        self.spill_test_paint_toggle = QCheckBox("污染像素測試塗色")
+        self.spill_test_paint_toggle.setToolTip("命中的 contaminatedMask 會直接變成亮紅色，Alpha 保持原值")
+        spill_layout.addRow("", self.spill_test_paint_toggle)
+        self.spill_detect_only_toggle = QCheckBox("只執行偵測，不套用修復")
+        spill_layout.addRow("", self.spill_detect_only_toggle)
+        stats_button = QPushButton("輸出本次修復統計到 console")
+        stats_button.clicked.connect(self.print_last_spill_debug_stats)
+        spill_layout.addRow("", stats_button)
+
+        self.spill_cleanup_dock = QDockWidget("邊緣融色修復", self)
+        self.spill_cleanup_dock.setObjectName("spillCleanupDock")
+        self.spill_cleanup_dock.setWidget(spill_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.spill_cleanup_dock)
+        self.tabifyDockWidget(self.layer_dock, self.spill_cleanup_dock)
+        self.layer_dock.raise_()
+        self.update_spill_cleanup_labels()
+
     def add_action(self, toolbar: QToolBar, label: str, slot, shortcut: Optional[str] = None, checkable: bool = False) -> QAction:
         action = QAction(label, self)
         action.setCheckable(checkable)
@@ -396,14 +481,20 @@ class MainWindow(QMainWindow):
         return action
 
     def show_layer_dock(self) -> None:
-        if self.layer_dock:
+        if self.layer_dock is not None:
             self.layer_dock.show()
             self.layer_dock.raise_()
 
     def show_frame_dock(self) -> None:
-        if self.frame_dock:
+        if self.frame_dock is not None:
             self.frame_dock.show()
             self.frame_dock.raise_()
+
+    def show_spill_cleanup_dock(self) -> None:
+        if self.spill_cleanup_dock is not None:
+            self.spill_cleanup_dock.show()
+            self.spill_cleanup_dock.raise_()
+            self.update_spill_cleanup_labels()
 
     def enable_file_drop(self) -> None:
         widgets = [
@@ -517,11 +608,11 @@ class MainWindow(QMainWindow):
         self.after_project_changed("已插入影格")
 
     def import_video(self) -> None:
-        dialog = VideoImportDialog(self)
+        dialog = VideoImportDialog(self, initial_directory=self.default_file_dialog_directory())
         self.run_video_import_dialog(dialog)
 
     def import_video_from_path(self, path: Path) -> None:
-        dialog = VideoImportDialog(self)
+        dialog = VideoImportDialog(self, initial_directory=path.parent)
         if not dialog.load_video(path):
             return
         self.run_video_import_dialog(dialog)
@@ -529,6 +620,8 @@ class MainWindow(QMainWindow):
     def run_video_import_dialog(self, dialog: VideoImportDialog) -> None:
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        if dialog.video_path is not None:
+            self.remember_import_path(dialog.video_path)
         if dialog.switch_to_editor:
             return
         self.add_video_frames(dialog.import_images)
@@ -537,6 +630,7 @@ class MainWindow(QMainWindow):
         new_frames = self.load_frames(paths)
         if not new_frames:
             return
+        self.remember_import_path(sort_image_paths(paths)[-1])
         if self.frames:
             self.push_undo()
             insert_at = len(self.frames)
@@ -571,10 +665,23 @@ class MainWindow(QMainWindow):
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "選擇圖片",
-            str(Path.home()),
+            str(self.default_file_dialog_directory()),
             "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
         )
-        return [Path(file) for file in files]
+        paths = [Path(file) for file in files]
+        if paths:
+            self.remember_import_path(paths[-1])
+        return paths
+
+    def remember_import_path(self, path: Path) -> None:
+        source = Path(path)
+        self.last_import_directory = source if source.is_dir() else source.parent
+
+    def default_file_dialog_directory(self) -> Path:
+        return self.last_import_directory or Path.home()
+
+    def default_export_path(self, filename: str) -> str:
+        return str(self.default_file_dialog_directory() / filename)
 
     def load_frames(self, paths: List[Path]) -> List[Frame]:
         frames = []
@@ -755,12 +862,207 @@ class MainWindow(QMainWindow):
             f"QPushButton {{ background: {background}; color: {text_color}; "
             "border: 2px solid #222; padding: 4px 10px; font-weight: 700; }}"
         )
+        self.update_spill_cleanup_labels()
 
     def set_brush_size(self, value: int) -> None:
         self.canvas.brush_size = value
 
     def set_tolerance(self, value: int) -> None:
         self.canvas.tolerance = value
+        self.update_spill_cleanup_labels()
+
+    def update_spill_cleanup_labels(self) -> None:
+        if not hasattr(self, "spill_color_label"):
+            return
+        alpha = self.color.alpha()
+        self.spill_color_label.setText(f"{self.color.name().upper()} / Alpha {alpha}")
+        self.spill_tolerance_label.setText(f"{self.canvas.tolerance}")
+
+    def spill_cleanup_options(self) -> dict:
+        options = {
+            "spillColor": QColor(self.color),
+            "colorTolerance": self.canvas.tolerance,
+            "despillStrength": self.spill_strength_spin.value(),
+            "edgeWidth": self.spill_edge_width_spin.value(),
+            "erodePixels": self.spill_erode_spin.value(),
+            "feather": self.spill_feather_spin.value(),
+            "enableColorBleeding": self.spill_bleed_toggle.isChecked(),
+            "alphaThreshold": 8,
+            "semiTransparentThreshold": 128,
+            "processTransparentPadding": True,
+            "returnDebugData": True,
+            "debugOverlayMode": self.spill_debug_overlay_combo.currentData() if hasattr(self, "spill_debug_overlay_combo") else "allDebugMasks",
+            "testPaintContaminated": self.spill_test_paint_toggle.isChecked() if hasattr(self, "spill_test_paint_toggle") else False,
+            "detectOnly": self.spill_detect_only_toggle.isChecked() if hasattr(self, "spill_detect_only_toggle") else False,
+        }
+        selection_mask = self.canvas.selection_mask_image()
+        if selection_mask is not None:
+            options["selectionMask"] = selection_mask
+        return options
+
+    def apply_color_spill_cleanup(self) -> None:
+        frame = self.current_frame
+        if not frame:
+            QMessageBox.information(self, "邊緣融色修復", "請先選取要修復的圖片物件")
+            return
+
+        scope = self.spill_scope_combo.currentData()
+        options = self.spill_cleanup_options()
+        detect_only = bool(options.get("detectOnly", False))
+        if not detect_only:
+            self.push_undo()
+        self.canvas.commit_floating_selection()
+
+        processed_layers = 0
+        debug_results = []
+        overlay_image = None
+
+        def process_layer(layer):
+            nonlocal overlay_image
+            result = applyColorSpillCleanupToImageData(layer.image, options)
+            if isinstance(result, tuple):
+                new_image, debug_data = result
+                debug_results.append(debug_data.get("stats", {}))
+                if overlay_image is None and self.spill_debug_overlay_toggle.isChecked():
+                    overlay_image = debug_data.get("overlay")
+            else:
+                new_image = result
+            if not detect_only:
+                layer.image = new_image
+
+        if scope == "layer":
+            process_layer(frame.active_layer)
+            if not detect_only:
+                frame.mark_dirty()
+            processed_layers = 1
+        elif scope == "frame":
+            for layer in frame.layers:
+                process_layer(layer)
+                processed_layers += 1
+            if not detect_only:
+                frame.mark_dirty()
+        else:
+            for project_frame in self.frames:
+                for layer in project_frame.layers:
+                    process_layer(layer)
+                    processed_layers += 1
+                if not detect_only:
+                    project_frame.mark_dirty()
+
+        self.canvas.set_debug_overlay(overlay_image if self.spill_debug_overlay_toggle.isChecked() else None)
+        self.canvas.update()
+        self.refresh_layers()
+        self.schedule_thumbnail_refresh()
+        self.last_spill_debug_stats = self.aggregate_spill_debug_stats(debug_results)
+        self.print_spill_debug_stats(self.last_spill_debug_stats)
+        action = "偵測" if detect_only else "套用"
+        self.status.showMessage(
+            f"已{action}邊緣融色修復：{processed_layers} 個圖層，參考色 {self.color.name().upper()}，容差 {self.canvas.tolerance}"
+        )
+
+    def aggregate_spill_debug_stats(self, stats_list: List[dict]) -> dict:
+        if not stats_list:
+            return {}
+        aggregate = dict(stats_list[0])
+        aggregate["processedLayerCount"] = len(stats_list)
+        sum_keys = {
+            "maskPixelCount",
+            "innerEdgeBandPixelCount",
+            "outerPaddingBandPixelCount",
+            "semiTransparentPixelCount",
+            "candidatePixelCount",
+            "contaminatedMaskPixelCount",
+            "contaminatedInnerEdgeCount",
+            "contaminatedSemiTransparentCount",
+            "contaminatedOuterPaddingCount",
+            "cleanColorLookupSuccessCount",
+            "cleanColorLookupFallbackCount",
+            "recoloredPixelCount",
+            "transparentPaddedPixelCount",
+            "alphaModifiedPixelCount",
+            "totalRGBChangedPixelCount",
+            "totalAlphaChangedPixelCount",
+            "beforeRGBSum",
+            "afterRGBSum",
+            "beforeAlphaSum",
+            "afterAlphaSum",
+        }
+        for key in sum_keys:
+            aggregate[key] = sum(int(stats.get(key, 0)) for stats in stats_list)
+        changed = aggregate.get("totalRGBChangedPixelCount", 0)
+        if changed:
+            aggregate["averageColorDelta"] = sum(
+                float(stats.get("averageColorDelta", 0.0)) * int(stats.get("totalRGBChangedPixelCount", 0))
+                for stats in stats_list
+            ) / changed
+        else:
+            aggregate["averageColorDelta"] = 0.0
+        contaminated = aggregate.get("contaminatedMaskPixelCount", 0)
+        if contaminated:
+            aggregate["averageRepairWeight"] = sum(
+                float(stats.get("averageRepairWeight", 0.0)) * int(stats.get("contaminatedMaskPixelCount", 0))
+                for stats in stats_list
+            ) / contaminated
+        else:
+            aggregate["averageRepairWeight"] = 0.0
+        aggregate["maxRepairWeight"] = max(float(stats.get("maxRepairWeight", 0.0)) for stats in stats_list)
+        return aggregate
+
+    def print_last_spill_debug_stats(self) -> None:
+        if not self.last_spill_debug_stats:
+            self.status.showMessage("尚無邊緣融色修復統計，請先執行一次")
+            print("No edge spill cleanup debug stats yet.")
+            return
+        self.print_spill_debug_stats(self.last_spill_debug_stats)
+
+    def print_spill_debug_stats(self, stats: dict) -> None:
+        if not stats:
+            print("Edge spill cleanup debug stats: <empty>")
+            return
+        keys = [
+            "processedLayerCount",
+            "width",
+            "height",
+            "selectionApplied",
+            "selectionPixelCount",
+            "spillColor",
+            "colorTolerance",
+            "despillStrength",
+            "edgeWidth",
+            "alphaThreshold",
+            "maskPixelCount",
+            "innerEdgeBandPixelCount",
+            "outerPaddingBandPixelCount",
+            "semiTransparentPixelCount",
+            "candidatePixelCount",
+            "contaminatedMaskPixelCount",
+            "contaminatedInnerEdgeCount",
+            "contaminatedSemiTransparentCount",
+            "contaminatedOuterPaddingCount",
+            "cleanColorLookupSuccessCount",
+            "cleanColorLookupFallbackCount",
+            "recoloredPixelCount",
+            "transparentPaddedPixelCount",
+            "alphaModifiedPixelCount",
+            "totalRGBChangedPixelCount",
+            "totalAlphaChangedPixelCount",
+            "averageColorDelta",
+            "averageRepairWeight",
+            "maxRepairWeight",
+            "beforeRGBSum",
+            "afterRGBSum",
+            "beforeAlphaSum",
+            "afterAlphaSum",
+            "detectOnly",
+            "testPaintContaminated",
+        ]
+        rows = [(key, stats.get(key, "")) for key in keys if key in stats]
+        width = max(len(str(key)) for key, _ in rows)
+        print("\nEdge Spill Cleanup Debug Stats")
+        print("-" * (width + 32))
+        for key, value in rows:
+            print(f"{key:<{width}} | {value}")
+        print("-" * (width + 32))
 
     def choose_background_color(self) -> None:
         color = choose_fixed_color(self.canvas.bg_color, self, "選擇背景色")
@@ -905,7 +1207,13 @@ class MainWindow(QMainWindow):
         frame = self.current_frame
         if not frame:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "儲存目前影格", frame.name, "PNG (*.png)")
+        filename = frame.name or "frame.png"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "儲存目前影格",
+            self.default_export_path(filename),
+            "PNG (*.png)",
+        )
         if path:
             self.export_frame_image(frame).save(path, "PNG")
             self.status.showMessage(f"已儲存：{path}")
@@ -914,7 +1222,12 @@ class MainWindow(QMainWindow):
         self.canvas.commit_floating_selection()
         if not self.frames:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "儲存 ZIP", "frames.zip", "ZIP (*.zip)")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "儲存 ZIP",
+            self.default_export_path("frames.zip"),
+            "ZIP (*.zip)",
+        )
         if not path:
             return
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -926,7 +1239,12 @@ class MainWindow(QMainWindow):
         self.canvas.commit_floating_selection()
         if not self.frames:
             return
-        dialog = SpritesheetPreviewDialog(self.frames, self, self.export_size())
+        dialog = SpritesheetPreviewDialog(
+            self.frames,
+            self,
+            self.export_size(),
+            self.default_file_dialog_directory(),
+        )
         dialog.exec()
 
     def show_animation_preview(self) -> None:
@@ -1200,12 +1518,19 @@ class AnimationDialog(QWidget):
 
 
 class SpritesheetPreviewDialog(QDialog):
-    def __init__(self, frames: List[Frame], parent=None, output_size: Optional[QSize] = None) -> None:
+    def __init__(
+        self,
+        frames: List[Frame],
+        parent=None,
+        output_size: Optional[QSize] = None,
+        default_directory: Optional[Path] = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Spritesheet 預覽")
         self.resize(980, 720)
         self.frames = [frame.clone() for frame in frames]
         self.output_size = output_size
+        self.default_directory = default_directory or Path.home()
         self.outline_color = QColor("#000000")
         self.current_sheet = make_blank_image(1, 1)
         self.preview_zoom = 1.0
@@ -1334,7 +1659,12 @@ class SpritesheetPreviewDialog(QDialog):
         self.preview.resize(pixmap.size())
 
     def save_sheet(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "儲存 Spritesheet", "spritesheet.png", "PNG (*.png)")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "儲存 Spritesheet",
+            str(self.default_directory / "spritesheet.png"),
+            "PNG (*.png)",
+        )
         if path:
             self.current_sheet.save(path, "PNG")
             self.parent().statusBar().showMessage(f"已儲存 Spritesheet：{path}")
@@ -1351,6 +1681,8 @@ def run() -> int:
         if video_dialog.exec() != QDialog.DialogCode.Accepted:
             return 0
         win = MainWindow()
+        if video_dialog.video_path is not None:
+            win.remember_import_path(video_dialog.video_path)
         win.show()
         if video_dialog.import_images:
             win.add_video_frames(video_dialog.import_images)

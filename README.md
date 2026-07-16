@@ -2,21 +2,28 @@
 
 [繁體中文 README](README.zh-TW.md)
 
-SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor built with Python, PySide6, OpenCV, NumPy, and Pillow. It replaces a large single-file HTML workflow with a native app for drawing, layer editing, frame sequencing, video frame extraction, alpha/color cleanup, animation preview, and spritesheet export.
+SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor built with Python, PySide6, OpenCV, NumPy, and Pillow. It replaces a large single-file HTML workflow with a native app for drawing, layer editing, frame sequencing, video frame extraction, alpha/color cleanup, selected-color edge spill cleanup, animation preview, and spritesheet export.
 
 ## Download
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.0.1-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.2.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.0.1.exe
+SpriteMakerPySide-2.2.0.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 2.2.0
+
+- Adds selected-color edge spill cleanup with nearby inner-color repair, transparent RGB padding, batch scopes, diagnostics, debug overlays, and undo/redo support.
+- Makes edge spill cleanup selection-aware: rectangular and lasso selections limit all modified pixels while nearby clean-color sampling can still use adjacent pixels.
+- Makes fill selection-aware: rectangular selections constrain flood fill, while clicking inside a lasso selection directly fills the entire lasso area.
+- Opens frame PNG, frame ZIP, spritesheet, and extracted-video ZIP save dialogs in the most recently imported file's directory.
 
 ## Startup
 
@@ -52,6 +59,8 @@ The **File** toolbar menu contains:
 - **Import Video**: open the video importer from editor mode.
 - **Save Current Frame** (`Ctrl+S`): export the current composited frame as PNG.
 - **Save ZIP**: export all frames to a ZIP file.
+
+Save dialogs for the current frame, frame ZIP, spritesheet, and extracted-video ZIP open in the directory of the most recently imported image or video. Before any file is imported, they use the user's home directory.
 
 You can also drag files into the editor:
 
@@ -114,7 +123,7 @@ Drawing, fill, erase, selection deletion, and color erase operations affect the 
 - **Lasso** (`L`): freeform selection.
 - **Pen** (`B`): draw with the current color and brush size.
 - **Eraser** (`E`): erase with the current brush size.
-- **Fill** (`G`): flood fill the active layer using the current color and tolerance.
+- **Fill** (`G`): flood fill the active layer using the current color and tolerance. A rectangular selection limits the flood fill to that selection. With a lasso selection active, clicking inside it directly replaces the whole lasso area with the current color.
 - **Magic Wand** (`W`): erase a connected color region on the active layer.
 - **Single-Frame Color Erase** (`Shift+W`): erase matching pixels from every layer in the current frame.
 - **Global Color Erase** (`U`): erase matching pixels from every layer in every frame.
@@ -124,6 +133,36 @@ Color erase behavior:
 - The clicked position is used only as the starting connected area for the magic wand.
 - The target color is the current toolbar color plus tolerance.
 - Single-frame erase and global erase process all matching pixels, not only connected pixels.
+
+### Selected-Color Edge Spill Cleanup
+
+The **Edge Spill Cleanup** dock repairs colored fringing around alpha edges without replacing color across the whole image. Use the **Spill Panel** toolbar button to reopen the dock when it is hidden.
+
+It reuses existing editor state:
+
+- Spill color: the current toolbar color.
+- Color tolerance: the existing tolerance value.
+
+Controls:
+
+- **Despill Strength**: repair strength from `0` to `1`, default `0.8`.
+- **Edge Width**: alpha-edge band width from `1` to `10 px`, default `3 px`.
+- **Alpha Erode**: optional alpha shrink from `0` to `3 px`, default `0`.
+- **Feather**: optional repair-weight smoothing from `0` to `3 px`, default `0`.
+- **Edge Color Bleeding**: fills RGB values in transparent edge padding while preserving alpha.
+- **Scope**: active layer, all layers in current frame, or all layers in all frames. With a rectangle or lasso selection active, cleanup only changes pixels inside that selection (the nearby clean-color lookup can still reference adjacent pixels for natural repair).
+
+Use it for green/red/blue screen residue, AI-generated color fringing, chroma-key leftovers, and transparent PNG edge padding. The tool only processes pixels near the alpha edge that are close to the current toolbar color; interior pixels with similar colors are left alone. Contaminated edge pixels are recolored from nearby clean inner character pixels, and alpha is preserved unless **Alpha Erode** is greater than `0`.
+
+Debug controls:
+
+- **Show Debug Overlay**: overlays the selected diagnostic mask on the canvas.
+- **Overlay Type**: `innerEdgeBand`, `outerPaddingBand`, `semiTransparentBand`, `contaminatedMask`, `lookupFallback`, `actualChangedPixels`, or `allDebugMasks`.
+- **Contaminated Pixel Test Paint**: paints detected contaminated pixels bright red while preserving alpha.
+- **Detect Only**: runs detection, statistics, and overlay generation without writing changes to the image.
+- **Print Last Stats**: prints the latest cleanup statistics to the console.
+
+Every run prints debug statistics including mask counts, contaminated pixel counts, clean-color lookup success/fallback counts, changed RGB/alpha counts, average RGB delta, average/max repair weight, and before/after RGB/alpha sums.
 
 ## Selection Editing
 

@@ -2,21 +2,28 @@
 
 [English README](README.md)
 
-SpriteMaker PySide 是一款以 Python + PySide6 製作的本地 Windows 桌面版 sprite 與 frame matting 編輯工具。它用桌面程式取代龐大的單檔 HTML 工作流程，支援繪圖、圖層編輯、影格序列、影片 frame 擷取、Alpha/顏色清理、動畫預覽與 spritesheet 輸出。
+SpriteMaker PySide 是一款以 Python + PySide6 製作的本地 Windows 桌面版 sprite 與 frame matting 編輯工具。它用桌面程式取代龐大的單檔 HTML 工作流程，支援繪圖、圖層編輯、影格序列、影片 frame 擷取、Alpha/顏色清理、指定色邊緣融色修復、動畫預覽與 spritesheet 輸出。
 
 ## 下載
 
 Windows 使用者可以從 GitHub Releases 下載已打包版本：
 
-- [SpriteMakerPySide-2.0.1-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.2.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 解壓縮後執行：
 
 ```text
-SpriteMakerPySide-2.0.1.exe
+SpriteMakerPySide-2.2.0.exe
 ```
 
 Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者不需要另外安裝 Python。
+
+## 2.2.0 更新重點
+
+- 新增指定色邊緣融色修復，支援附近內側顏色補色、透明 RGB padding、批次套用範圍、統計、Debug Overlay 與 undo/redo。
+- 邊緣融色支援選取範圍：矩形與繩索選取會限制實際修改的像素，但仍可從鄰近區域取得乾淨補色。
+- 填色支援選取範圍：矩形選取會限制連通填色，在繩索選取內點擊則直接填滿整個繩索範圍。
+- 儲存單幀 PNG、frame ZIP、spritesheet 與影片擷取 ZIP 時，預設開啟最近匯入檔案所在的資料夾。
 
 ## 啟動流程
 
@@ -52,6 +59,8 @@ frame_10.png
 - **匯入影片**：從編輯模式開啟影片匯入器。
 - **儲存單幀** (`Ctrl+S`)：將目前合成 frame 匯出為 PNG。
 - **儲存 ZIP**：將所有 frame 匯出成 ZIP。
+
+儲存單幀、frame ZIP、spritesheet 與影片擷取 ZIP 的對話視窗，會預設開啟最近匯入圖片或影片所在的資料夾；尚未匯入檔案時則使用使用者主目錄。
 
 也可以直接拖放檔案：
 
@@ -114,7 +123,7 @@ frame_10.png
 - **繩索** (`L`)：自由形狀選取。
 - **畫筆** (`B`)：使用目前顏色與筆刷大小繪圖。
 - **橡皮擦** (`E`)：使用目前筆刷大小擦除。
-- **填色** (`G`)：依目前顏色與容差填滿作用中圖層的連通區域。
+- **填色** (`G`)：依目前顏色與容差填滿作用中圖層的連通區域；矩形選取存在時，填色只會在選取範圍內擴散。繩索選取存在時，點擊選取內會直接以目前顏色填滿整個繩索範圍。
 - **魔術棒** (`W`)：在作用中圖層擦除連通色域。
 - **單幀去色** (`Shift+W`)：在目前 frame 的所有圖層中擦除符合目標色的像素。
 - **全域去色** (`U`)：在所有 frame、所有圖層中擦除符合目標色的像素。
@@ -124,6 +133,36 @@ frame_10.png
 - 魔術棒點擊位置只決定起始連通區域。
 - 目標顏色使用工具列目前顏色 + 容差。
 - 單幀去色和全域去色會處理所有符合像素，不限定連通區域。
+
+### 指定色邊緣融色修復
+
+右側 **邊緣融色修復** 面板可修復 alpha 邊緣附近的指定顏色殘邊，不會把全圖相同顏色直接替換掉。面板被關閉或藏起來時，可用上方工具列的 **融色面板** 按鈕重新叫出。
+
+此功能直接沿用既有狀態：
+
+- 殘邊污染色：工具列目前選取顏色。
+- 顏色容差：工具列既有容差數值。
+
+可調整：
+
+- **修復強度**：`0` 到 `1`，預設 `0.8`。
+- **邊緣寬度**：處理 alpha 邊緣 `1` 到 `10 px` 範圍，預設 `3 px`。
+- **Alpha 收縮**：可選擇小幅吃掉 alpha 邊緣 `0` 到 `3 px`，預設 `0`。
+- **邊緣柔化**：可選擇柔化補色權重 `0` 到 `3 px`，預設 `0`。
+- **啟用邊緣補色**：替透明邊緣 padding 寫入內側乾淨 RGB，但保持原本 alpha。
+- **套用範圍**：目前選取圖層、目前幀所有圖層、所有幀所有圖層；矩形或繩索選取存在時，融色只會改變選取範圍內的像素，鄰近乾淨顏色取樣仍可參考選取外側，確保補色自然。
+
+適合修復綠幕、紅幕、藍幕、AI 生成殘邊、去背殘色與透明 PNG 縮放時露出的污染色。它只會處理靠近 alpha 邊緣且接近目前工具列顏色的像素，角色內部同色裝飾不會被全圖誤改。污染邊緣像素會使用附近角色內側乾淨顏色補回，alpha 預設保持原本數值，只有 **Alpha 收縮** 大於 `0` 時才會收縮 alpha。
+
+Debug 控制：
+
+- **顯示 Debug Overlay**：在畫布上疊加目前選擇的診斷遮罩。
+- **Overlay 類型**：可選 `innerEdgeBand`、`outerPaddingBand`、`semiTransparentBand`、`contaminatedMask`、`lookupFallback`、`actualChangedPixels` 或 `allDebugMasks`。
+- **污染像素測試塗色**：將被判定為污染的像素直接塗成亮紅色，alpha 保持原值。
+- **只執行偵測，不套用修復**：只建立遮罩、統計與 overlay，不寫回圖片。
+- **輸出本次修復統計到 console**：重新印出最近一次統計。
+
+每次執行都會在 console 輸出統計，包含 mask 數量、污染像素數量、乾淨補色尋找成功/失敗數、RGB/alpha 實際改變數、平均 RGB 變化量、平均/最大修復權重，以及 before/after RGB/alpha sum。
 
 ## 選取與剪貼操作
 
