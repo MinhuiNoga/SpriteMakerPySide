@@ -33,6 +33,7 @@ from .video_ops import ExtractedVideoFrame, VideoMetadata, cv_frame_to_qimage, e
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv"}
+FRAME_THUMBNAIL_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
 
 def format_seconds(value: float) -> str:
@@ -925,9 +926,11 @@ class VideoImportDialog(QDialog):
             )
             item = QListWidgetItem(QIcon(pixmap), str(index + 1))
             item.setData(Qt.ItemDataRole.UserRole, index)
+            item.setData(FRAME_THUMBNAIL_ROLE, pixmap)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(checked.get(index, Qt.CheckState.Checked))
             self.frame_list.addItem(item)
+            self.update_frame_item_visual(item)
 
     def update_frame_preview(self, row: int) -> None:
         if row < 0 or row >= len(self.frames):
@@ -937,6 +940,11 @@ class VideoImportDialog(QDialog):
         self.frame_preview.setToolTip(f"Frame {row + 1} / {frame.timestamp:.3f}s / source #{frame.source_index}")
 
     def on_frame_check_changed(self, *args) -> None:
+        if args and isinstance(args[0], QListWidgetItem):
+            self.update_frame_item_visual(args[0])
+        else:
+            for row in range(self.frame_list.count()):
+                self.update_frame_item_visual(self.frame_list.item(row))
         selected = self.selected_frames()
         if not selected:
             self.stop_frame_animation()
@@ -946,6 +954,21 @@ class VideoImportDialog(QDialog):
             return
         self.animation_index = min(self.animation_index, len(selected) - 1)
         self.show_animation_frame(self.animation_index)
+
+    def update_frame_item_visual(self, item: QListWidgetItem) -> None:
+        source = item.data(FRAME_THUMBNAIL_ROLE)
+        if not isinstance(source, QPixmap) or source.isNull():
+            return
+        display = QPixmap(source)
+        if item.checkState() != Qt.CheckState.Checked:
+            painter = QPainter(display)
+            painter.fillRect(display.rect(), QColor(70, 70, 70, 155))
+            painter.end()
+        signals_were_blocked = self.frame_list.blockSignals(True)
+        try:
+            item.setIcon(QIcon(display))
+        finally:
+            self.frame_list.blockSignals(signals_were_blocked)
 
     def toggle_frame_animation(self) -> None:
         selected = self.selected_frames()
@@ -1069,6 +1092,18 @@ class VideoImportDialog(QDialog):
         self.accept()
 
     def accept_for_editor_switch(self) -> None:
+        answer = QMessageBox.warning(
+            self,
+            "切換到編輯模式",
+            "切換後會關閉影片匯入介面，並回到初始化的編輯模式。\n"
+            "目前擷取的 frame 與勾選狀態不會匯入編輯器。"
+            "若要保留，請取消並使用「匯入編輯器」。\n"
+            "是否繼續？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         self.switch_to_editor = True
         self.import_images = []
         self.accept()

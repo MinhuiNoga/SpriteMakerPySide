@@ -8,15 +8,26 @@ SpriteMaker PySide 是一款以 Python + PySide6 製作的本地 Windows 桌面�
 
 Windows 使用者可以從 GitHub Releases 下載已打包版本：
 
-- [SpriteMakerPySide-2.2.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.2.2-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 解壓縮後執行：
 
 ```text
-SpriteMakerPySide-2.2.0.exe
+SpriteMakerPySide-2.2.2.exe
 ```
 
 Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者不需要另外安裝 Python。
+
+## 2.2.2 更新重點
+
+- 從編輯模式切換到影片匯入前，會先顯示破壞性操作警告。
+- 使用者確認後，編輯頁會關閉，並初始化 frame、圖層、選取、剪貼簿、Debug Overlay 與 undo/redo 紀錄，再開啟影片匯入介面。
+- 取消警告會保留編輯器及所有目前內容；將影片拖入編輯器時也會使用相同確認流程。
+- 影片 frame 選擇頁的 **切換到編輯模式** 也需要確認，並會警告擷取 frame 與勾選狀態不會被匯入；要保留勾選 frame 應使用 **匯入編輯器**。
+
+## 2.2.1 更新重點
+
+- 影片擷取後的 frame 選擇頁中，未勾選縮圖會顯示半透明灰色遮罩，可以直觀區分保留與取消的 frame。
 
 ## 2.2.0 更新重點
 
@@ -32,7 +43,7 @@ Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者
 - **匯入影片**：先進入影片 frame 擷取流程。
 - **進入編輯模式**：直接進入 sprite 編輯器。
 
-在影片匯入流程中，可以按 **切換到編輯模式** 關閉影片匯入視窗並進入編輯器。
+在影片匯入流程中，可以按 **切換到編輯模式** 關閉影片匯入視窗並進入初始化的編輯器。程式會先警告擷取 frame 不會被帶入；要保留勾選 frame 時請使用 **匯入編輯器**。
 
 ## 支援檔案
 
@@ -56,7 +67,7 @@ frame_10.png
 - **匯入** (`Ctrl+O`)：將圖片匯入為新的 frame 序列，會取代目前已有 frame。
 - **插入** (`Ctrl+I`)：將圖片插入目前 frame 後方。
 - **清空**：清空目前專案。
-- **匯入影片**：從編輯模式開啟影片匯入器。
+- **匯入影片**：從編輯模式切換到影片匯入器。程式會先警告目前編輯專案與歷史將被初始化，只有確認後才會切換。
 - **儲存單幀** (`Ctrl+S`)：將目前合成 frame 匯出為 PNG。
 - **儲存 ZIP**：將所有 frame 匯出成 ZIP。
 
@@ -205,7 +216,7 @@ Debug 控制：
 
 - 左上：已勾選 frame 的動畫預覽。
 - 右上：單張 frame 預覽。
-- 下方：擷取出的 frame 縮圖序列。
+- 下方：擷取出的 frame 縮圖序列，取消勾選的 frame 會顯示半透明灰色遮罩。
 - 可拖曳分隔線調整各區塊大小。
 - 在預覽或 frame 序列使用 `Ctrl + 滾輪` 可縮放。
 - 勾選/取消勾選 frame 來決定要保留哪些。

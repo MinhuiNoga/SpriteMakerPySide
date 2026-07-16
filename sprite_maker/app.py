@@ -608,23 +608,64 @@ class MainWindow(QMainWindow):
         self.after_project_changed("已插入影格")
 
     def import_video(self) -> None:
-        dialog = VideoImportDialog(self, initial_directory=self.default_file_dialog_directory())
-        self.run_video_import_dialog(dialog)
+        if not self.confirm_video_import_switch():
+            return
+        dialog = VideoImportDialog(
+            self,
+            show_switch_button=True,
+            initial_directory=self.default_file_dialog_directory(),
+        )
+        self.reset_editor_for_video_import()
+        self.run_video_import_dialog(dialog, editor_mode_switch=True)
 
     def import_video_from_path(self, path: Path) -> None:
-        dialog = VideoImportDialog(self, initial_directory=path.parent)
+        if not self.confirm_video_import_switch():
+            return
+        dialog = VideoImportDialog(self, show_switch_button=True, initial_directory=path.parent)
         if not dialog.load_video(path):
             return
-        self.run_video_import_dialog(dialog)
+        self.reset_editor_for_video_import()
+        self.run_video_import_dialog(dialog, editor_mode_switch=True)
 
-    def run_video_import_dialog(self, dialog: VideoImportDialog) -> None:
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        if dialog.video_path is not None:
-            self.remember_import_path(dialog.video_path)
-        if dialog.switch_to_editor:
-            return
-        self.add_video_frames(dialog.import_images)
+    def confirm_video_import_switch(self) -> bool:
+        answer = QMessageBox.warning(
+            self,
+            "切換到匯入影片",
+            "切換後會關閉目前編輯模式，並初始化所有 frame、圖層與復原/重做紀錄。\n"
+            "尚未儲存的編輯內容將會遺失。是否繼續？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def reset_editor_for_video_import(self) -> None:
+        self.frames.clear()
+        self.current_index = 0
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self._export_size_initialized = False
+        self.last_spill_debug_stats = None
+        self.canvas.clipboard_image = None
+        self.canvas.set_debug_overlay(None)
+        self.after_project_changed("已初始化編輯模式")
+
+    def run_video_import_dialog(self, dialog: VideoImportDialog, editor_mode_switch: bool = False) -> None:
+        if editor_mode_switch:
+            self.hide()
+        try:
+            result = dialog.exec()
+            if result != QDialog.DialogCode.Accepted:
+                return
+            if dialog.video_path is not None:
+                self.remember_import_path(dialog.video_path)
+            if dialog.switch_to_editor:
+                return
+            self.add_video_frames(dialog.import_images)
+        finally:
+            if editor_mode_switch:
+                self.show()
+                self.raise_()
+                self.activateWindow()
 
     def append_image_frames(self, paths: List[Path]) -> None:
         new_frames = self.load_frames(paths)

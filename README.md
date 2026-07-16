@@ -8,15 +8,26 @@ SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor bu
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.2.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.2.2-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.2.0.exe
+SpriteMakerPySide-2.2.2.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 2.2.2
+
+- Switching from editor mode to video import now shows a destructive-action warning first.
+- After confirmation, the editor page closes and its frames, layers, selections, clipboard, debug overlay, and undo/redo history are initialized before video import opens.
+- Cancelling the warning keeps the editor and all current content unchanged. Dragging a video into the editor follows the same confirmation flow.
+- **Switch to Editor Mode** in the video frame selection page also requires confirmation and warns that extracted frames and checked states will not be imported; use **Import to Editor** to keep checked frames.
+
+## What's New In 2.2.1
+
+- Unchecked thumbnails on the extracted-video frame selection page now display a semi-transparent gray overlay, making kept and discarded frames easy to distinguish at a glance.
 
 ## What's New In 2.2.0
 
@@ -32,7 +43,7 @@ When the app opens, choose one of two workflows:
 - **Import Video**: open the video frame extraction workflow first.
 - **Enter Editor Mode**: open the sprite editor directly.
 
-From the video workflow, use **Switch to Editor Mode** to close the video importer and enter the editor.
+From the video workflow, use **Switch to Editor Mode** to close the video importer and enter an initialized editor. A confirmation warns that extracted frames are discarded; use **Import to Editor** when checked frames should be kept.
 
 ## Supported Files
 
@@ -56,7 +67,7 @@ The **File** toolbar menu contains:
 - **Import** (`Ctrl+O`): import image files as a new frame sequence. Existing frames are replaced.
 - **Insert** (`Ctrl+I`): insert images after the current frame.
 - **Clear**: clear the current project.
-- **Import Video**: open the video importer from editor mode.
+- **Import Video**: switch from editor mode to the video importer. A warning explains that the current editor project and history will be initialized; the switch only proceeds after confirmation.
 - **Save Current Frame** (`Ctrl+S`): export the current composited frame as PNG.
 - **Save ZIP**: export all frames to a ZIP file.
 
@@ -205,7 +216,7 @@ After extraction, the app opens a clean frame selection page:
 
 - Left top: animation preview of checked frames.
 - Right top: single-frame preview.
-- Bottom: extracted frame thumbnail list.
+- Bottom: extracted frame thumbnail list. Unchecked frames display a semi-transparent gray thumbnail overlay.
 - Splitters let you resize the preview and frame list areas.
 - `Ctrl+wheel` on the preview or frame list changes zoom/thumbnail size.
 - Check or uncheck frames to decide what to keep.
