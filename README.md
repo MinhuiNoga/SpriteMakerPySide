@@ -8,15 +8,20 @@ SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor bu
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.2.2-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.2.3-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.2.2.exe
+SpriteMakerPySide-2.2.3.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 2.2.3
+
+- Closing or switching away from editor mode now also closes its frame timeline, layer panel, edge spill cleanup panel, and other editor child dialogs.
+- Editor ZIP export now follows the current arranged frame order and always renames every image sequentially as `video_frame_0001.png`, `video_frame_0002.png`, and so on.
 
 ## What's New In 2.2.2
 
@@ -69,7 +74,7 @@ The **File** toolbar menu contains:
 - **Clear**: clear the current project.
 - **Import Video**: switch from editor mode to the video importer. A warning explains that the current editor project and history will be initialized; the switch only proceeds after confirmation.
 - **Save Current Frame** (`Ctrl+S`): export the current composited frame as PNG.
-- **Save ZIP**: export all frames to a ZIP file.
+- **Save ZIP**: export all frames in their current arranged order to a ZIP file, renamed sequentially as `video_frame_0001.png`, `video_frame_0002.png`, and so on.
 
 Save dialogs for the current frame, frame ZIP, spritesheet, and extracted-video ZIP open in the directory of the most recently imported image or video. Before any file is imported, they use the user's home directory.
 

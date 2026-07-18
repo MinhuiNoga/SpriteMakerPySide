@@ -615,7 +615,7 @@ class MainWindow(QMainWindow):
             show_switch_button=True,
             initial_directory=self.default_file_dialog_directory(),
         )
-        self.reset_editor_for_video_import()
+        self.reset_editor_for_video_import(dialog)
         self.run_video_import_dialog(dialog, editor_mode_switch=True)
 
     def import_video_from_path(self, path: Path) -> None:
@@ -624,7 +624,7 @@ class MainWindow(QMainWindow):
         dialog = VideoImportDialog(self, show_switch_button=True, initial_directory=path.parent)
         if not dialog.load_video(path):
             return
-        self.reset_editor_for_video_import()
+        self.reset_editor_for_video_import(dialog)
         self.run_video_import_dialog(dialog, editor_mode_switch=True)
 
     def confirm_video_import_switch(self) -> bool:
@@ -638,7 +638,16 @@ class MainWindow(QMainWindow):
         )
         return answer == QMessageBox.StandardButton.Yes
 
-    def reset_editor_for_video_import(self) -> None:
+    def close_editor_auxiliary_windows(self, exclude_dialog: Optional[QDialog] = None) -> None:
+        for dock in (self.frame_dock, self.layer_dock, self.spill_cleanup_dock):
+            if dock is not None:
+                dock.close()
+        for dialog in self.findChildren(QDialog):
+            if dialog is not exclude_dialog:
+                dialog.close()
+
+    def reset_editor_for_video_import(self, exclude_dialog: Optional[QDialog] = None) -> None:
+        self.close_editor_auxiliary_windows(exclude_dialog)
         self.frames.clear()
         self.current_index = 0
         self.undo_stack.clear()
@@ -1273,7 +1282,7 @@ class MainWindow(QMainWindow):
             return
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for i, frame in enumerate(self.frames, 1):
-                zf.writestr(frame.name or f"frame_{i:04d}.png", self.image_png_bytes(self.export_frame_image(frame)))
+                zf.writestr(f"video_frame_{i:04d}.png", self.image_png_bytes(self.export_frame_image(frame)))
         self.status.showMessage(f"已儲存 ZIP：{path}")
 
     def export_spritesheet(self) -> None:
@@ -1332,6 +1341,10 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "scroll"):
             self.update_canvas_extent()
+
+    def closeEvent(self, event) -> None:
+        self.close_editor_auxiliary_windows()
+        super().closeEvent(event)
 
     def schedule_thumbnail_refresh(self) -> None:
         self._thumb_timer.start(60)

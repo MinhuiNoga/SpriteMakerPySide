@@ -8,15 +8,20 @@ SpriteMaker PySide 是一款以 Python + PySide6 製作的本地 Windows 桌面�
 
 Windows 使用者可以從 GitHub Releases 下載已打包版本：
 
-- [SpriteMakerPySide-2.2.2-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.2.3-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 解壓縮後執行：
 
 ```text
-SpriteMakerPySide-2.2.2.exe
+SpriteMakerPySide-2.2.3.exe
 ```
 
 Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者不需要另外安裝 Python。
+
+## 2.2.3 更新重點
+
+- 關閉編輯模式或切換到影片匯入時，會一併關閉影格列、圖層面板、邊緣融色面板及其他編輯器子視窗。
+- 編輯模式匯出 ZIP 時，會依目前已排列的 frame 順序重新命名全部圖片，格式為 `video_frame_0001.png`、`video_frame_0002.png`，依此類推。
 
 ## 2.2.2 更新重點
 
@@ -69,7 +74,7 @@ frame_10.png
 - **清空**：清空目前專案。
 - **匯入影片**：從編輯模式切換到影片匯入器。程式會先警告目前編輯專案與歷史將被初始化，只有確認後才會切換。
 - **儲存單幀** (`Ctrl+S`)：將目前合成 frame 匯出為 PNG。
-- **儲存 ZIP**：將所有 frame 匯出成 ZIP。
+- **儲存 ZIP**：依目前排列順序將所有 frame 匯出成 ZIP，並重新命名為 `video_frame_0001.png`、`video_frame_0002.png`，依此類推。
 
 儲存單幀、frame ZIP、spritesheet 與影片擷取 ZIP 的對話視窗，會預設開啟最近匯入圖片或影片所在的資料夾；尚未匯入檔案時則使用使用者主目錄。
 
