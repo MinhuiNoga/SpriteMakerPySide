@@ -12,12 +12,13 @@ from .models import Frame
 
 
 class FrameStripWidget(QListWidget):
-    frame_reordered = Signal(int, int)
+    frames_reordered = Signal(object, int)
 
     def __init__(self) -> None:
         super().__init__()
         self._drag_start_pos: Optional[QPoint] = None
         self._drag_row = -1
+        self._drag_rows: List[int] = []
         self._drop_row = -1
         self._is_dragging = False
         self._pulse = 0
@@ -32,6 +33,9 @@ class FrameStripWidget(QListWidget):
             self._drop_row = self._drag_row
             self._is_dragging = False
         super().mousePressEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            selected_rows = sorted(index.row() for index in self.selectedIndexes())
+            self._drag_rows = selected_rows if self._drag_row in selected_rows else [self._drag_row]
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._drag_start_pos is not None and self._drag_row >= 0:
@@ -50,13 +54,11 @@ class FrameStripWidget(QListWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._is_dragging:
-            old = self._drag_row
-            new = self._drop_row
+            rows = [row for row in self._drag_rows if row >= 0]
+            drop_row = self._drop_row
             self._reset_drag()
-            if old >= 0 and new >= 0 and old != new and old + 1 != new:
-                if new > old:
-                    new -= 1
-                self.frame_reordered.emit(old, new)
+            if rows and drop_row >= 0:
+                self.frames_reordered.emit(rows, drop_row)
             return
         self._reset_drag()
         super().mouseReleaseEvent(event)
@@ -105,6 +107,7 @@ class FrameStripWidget(QListWidget):
     def _reset_drag(self) -> None:
         self._drag_start_pos = None
         self._drag_row = -1
+        self._drag_rows = []
         self._drop_row = -1
         self._is_dragging = False
         self._pulse_timer.stop()
@@ -144,6 +147,8 @@ class CanvasWidget(QWidget):
         self.lasso_points: List[QPoint] = []
         self.clipboard_image: Optional[QImage] = None
         self.floating_image: Optional[QImage] = None
+        self.batch_selection_frames: List[Frame] = []
+        self.batch_floating_images: List[tuple[Frame, QImage]] = []
         self.floating_pos = QPointF(0, 0)
         self.floating_rotation = 0.0
         self.floating_flip_x = False
@@ -169,11 +174,30 @@ class CanvasWidget(QWidget):
         self._last_pos = None
         self._dragging_floating = False
         self.floating_image = None
+        self.batch_floating_images = []
         self.selection_rect = None
         self.lasso_points = []
         self.debug_overlay_image = None
         self.updateGeometry()
         self.update()
+
+    def set_batch_selection_frames(self, frames: List[Frame]) -> None:
+        unique_frames: List[Frame] = []
+        seen = set()
+        for frame in frames:
+            identity = id(frame)
+            if identity not in seen:
+                seen.add(identity)
+                unique_frames.append(frame)
+        self.batch_selection_frames = unique_frames
+
+    def selection_target_frames(self) -> List[Frame]:
+        if not self.frame:
+            return []
+        targets = list(self.batch_selection_frames)
+        if not any(frame is self.frame for frame in targets):
+            targets.insert(0, self.frame)
+        return targets
 
     def set_tool(self, tool: str) -> None:
         if tool not in {"select", "lasso"}:
@@ -528,16 +552,26 @@ class CanvasWidget(QWidget):
     def cut_selection(self) -> bool:
         if not self.frame:
             return False
-        image = self._selection_to_image()
+        bounds = self._selection_bounds()
+        if bounds.isNull() or bounds.width() <= 0 or bounds.height() <= 0:
+            self.status_changed.emit("沒有可剪下的選取範圍")
+            return False
+        targets = self.selection_target_frames()
+        floating_images = [(frame, self._selection_to_image(frame, bounds)) for frame in targets]
+        floating_images = [(frame, image) for frame, image in floating_images if image is not None]
+        image = next((image for frame, image in floating_images if frame is self.frame), None)
         if image is None:
             self.status_changed.emit("沒有可剪下的選取範圍")
             return False
         self.editing_started.emit()
         self.clipboard_image = image
-        self.clipboard_pos = self._selection_bounds().topLeft()
-        self._clear_selection_from_layer()
+        self.clipboard_pos = bounds.topLeft()
+        for frame, _ in floating_images:
+            self._clear_selection_from_layer(frame)
+            frame.mark_dirty()
         self.floating_image = image.copy()
-        self.floating_pos = QPointF(self._selection_bounds().topLeft())
+        self.batch_floating_images = floating_images if len(floating_images) > 1 else []
+        self.floating_pos = QPointF(bounds.topLeft())
         self.floating_rotation = 0
         self.floating_flip_x = False
         self.floating_flip_y = False
@@ -545,7 +579,9 @@ class CanvasWidget(QWidget):
         self.floating_scale_y = 1.0
         self.selection_rect = None
         self.lasso_points = []
-        self._finish_edit("已剪下為浮動選取")
+        target_count = len(floating_images)
+        status = "已建立同步浮動選取" if target_count > 1 else "已剪下為浮動選取"
+        self._finish_edit(f"{status}（{target_count} 幀）" if target_count > 1 else status)
         return True
 
     def paste_selection(self) -> bool:
@@ -555,6 +591,7 @@ class CanvasWidget(QWidget):
         self.commit_floating_selection()
         self.editing_started.emit()
         self.floating_image = self.clipboard_image.copy()
+        self.batch_floating_images = []
         self.floating_pos = QPointF(getattr(self, "clipboard_pos", QPoint(0, 0)))
         self.floating_rotation = 0
         self.floating_flip_x = False
@@ -596,13 +633,16 @@ class CanvasWidget(QWidget):
     def commit_floating_selection(self) -> bool:
         if not self.frame or self.floating_image is None:
             return False
-        painter = QPainter(self.frame.active_layer.image)
         transform = self._floating_transform()
-        painter.setTransform(transform)
-        painter.drawImage(0, 0, self.floating_image)
-        painter.end()
+        floating_images = self.batch_floating_images or [(self.frame, self.floating_image)]
+        for frame, image in floating_images:
+            painter = QPainter(frame.active_layer.image)
+            painter.setTransform(transform)
+            painter.drawImage(0, 0, image)
+            painter.end()
+            frame.mark_dirty()
         self.floating_image = None
-        self.frame.mark_dirty()
+        self.batch_floating_images = []
         self.image_changed.emit()
         self.update()
         return True
@@ -639,15 +679,21 @@ class CanvasWidget(QWidget):
         if self.floating_image is not None:
             self.editing_started.emit()
             self.floating_image = None
-            self.status_changed.emit("已刪除浮動選取")
+            target_count = len(self.batch_floating_images) or 1
+            self.batch_floating_images = []
+            self.status_changed.emit(f"已刪除浮動選取（{target_count} 幀）" if target_count > 1 else "已刪除浮動選取")
             self.update()
             return True
         if self.selection_rect or self.lasso_points:
             self.editing_started.emit()
-            self._clear_selection_from_layer()
+            targets = self.selection_target_frames()
+            for frame in targets:
+                self._clear_selection_from_layer(frame)
+                frame.mark_dirty()
             self.selection_rect = None
             self.lasso_points = []
-            self._finish_edit("已刪除選取內容")
+            target_count = len(targets)
+            self._finish_edit(f"已刪除選取內容（{target_count} 幀）" if target_count > 1 else "已刪除選取內容")
             return True
         return False
 
@@ -726,13 +772,14 @@ class CanvasWidget(QWidget):
         painter.drawEllipse(center, radius, radius)
         painter.restore()
 
-    def _selection_to_image(self) -> Optional[QImage]:
-        if not self.frame:
+    def _selection_to_image(self, frame: Optional[Frame] = None, bounds: Optional[QRect] = None) -> Optional[QImage]:
+        target_frame = frame or self.frame
+        if not target_frame:
             return None
-        bounds = self._selection_bounds()
+        bounds = bounds or self._selection_bounds()
         if bounds.isNull() or bounds.width() <= 0 or bounds.height() <= 0:
             return None
-        layer = self.frame.active_layer.image
+        layer = target_frame.active_layer.image
         out = QImage(bounds.size(), QImage.Format.Format_RGBA8888)
         out.fill(Qt.GlobalColor.transparent)
         painter = QPainter(out)
@@ -750,10 +797,11 @@ class CanvasWidget(QWidget):
             return self._lasso_path(QPoint(0, 0)).contains(QPointF(point))
         return False
 
-    def _clear_selection_from_layer(self) -> None:
-        if not self.frame:
+    def _clear_selection_from_layer(self, frame: Optional[Frame] = None) -> None:
+        target_frame = frame or self.frame
+        if not target_frame:
             return
-        image = self.frame.active_layer.image
+        image = target_frame.active_layer.image
         painter = QPainter(image)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
         if self.lasso_points:
@@ -761,7 +809,7 @@ class CanvasWidget(QWidget):
         elif self.selection_rect:
             painter.fillRect(self.selection_rect, QColor(0, 0, 0, 0))
         painter.end()
-        self.frame.mark_dirty()
+        target_frame.mark_dirty()
 
     def _selection_bounds(self) -> QRect:
         if self.selection_rect:

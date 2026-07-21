@@ -1,6 +1,6 @@
 [project]
 name = "sprite-maker-pyside"
-version = "2.2.3"
+version = "2.2.4"
 description = "Python + PySide6 desktop rewrite of a sprite editor."
 requires-python = ">=3.9"
 dependencies = [

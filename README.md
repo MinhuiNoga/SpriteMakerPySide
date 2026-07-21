@@ -8,15 +8,22 @@ SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor bu
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.2.3-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.2.4-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.2.3.exe
+SpriteMakerPySide-2.2.4.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 2.2.4
+
+- Adds **All-Frame Selection Box** to synchronize selection movement, scaling, free rotation, flipping, and deletion across frames. With one timeline thumbnail selected it targets every frame; with a multi-frame selection it targets only those frames.
+- Adds inclusive `Shift` range selection to the editor frame timeline. Click one frame, then `Shift`-click another to select both endpoints and every frame between them.
+- Selected frame ranges can be dragged as one ordered block, and opening Animation Preview uses the selected range as its initial playback start/end interval.
+- Synchronized frame edits are stored as one project-wide undo/redo operation.
 
 ## What's New In 2.2.3
 
@@ -95,6 +102,14 @@ The bottom frame dock contains:
 - Thumbnail timeline
 
 Frames can be reordered by dragging thumbnails in the frame timeline. Reordering enters undo history.
+
+Use the timeline's multi-frame controls as follows:
+
+- Click one frame, then `Shift`-click another to select the inclusive continuous range.
+- Drag any selected thumbnail to move the whole selected range while preserving its internal order.
+- Enable **All-Frame Selection Box** before drawing a rectangular or lasso selection. One selected thumbnail targets all frames; two or more selected thumbnails target only that selected range.
+- Move, resize, rotate, flip, or delete the selected content to apply the same transform to every target frame. One undo restores the complete synchronized operation.
+- Opening Animation Preview with a selected range sets that range as the initial playback interval.
 
 ### Layers
 
@@ -281,6 +296,7 @@ Options:
 | `Ctrl+-` | Zoom out |
 | `Ctrl+0` | Reset canvas zoom |
 | `Ctrl+wheel` | Zoom the canvas/preview under the cursor |
+| `Shift+click` two timeline frames | Select the inclusive continuous frame range |
 | `B` | Pen |
 | `E` | Eraser |
 | `V` | Rectangular selection |

@@ -8,15 +8,22 @@ SpriteMaker PySide 是一款以 Python + PySide6 製作的本地 Windows 桌面�
 
 Windows 使用者可以從 GitHub Releases 下載已打包版本：
 
-- [SpriteMakerPySide-2.2.3-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.2.4-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 解壓縮後執行：
 
 ```text
-SpriteMakerPySide-2.2.3.exe
+SpriteMakerPySide-2.2.4.exe
 ```
 
 Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者不需要另外安裝 Python。
+
+## 2.2.4 更新重點
+
+- 新增 **全 Frame 選取框**，可將選取內容的移動、縮放、自由旋轉、翻轉與刪除同步套用到多個 frame。影格列只選一幀時作用於全部 frame，多選時只作用於選取的 frame。
+- 編輯模式的影格列新增包含端點的 `Shift` 範圍選取：先點一個 frame，再按住 `Shift` 點另一個 frame，兩者之間的所有 frame 都會被選取。
+- 選取的 frame 區間可維持內部順序整組拖曳；開啟動畫預覽時，也會將選取區間設為預設播放開始／結束範圍。
+- 多 frame 同步編輯會記錄成一筆全專案 undo/redo 操作。
 
 ## 2.2.3 更新重點
 
@@ -95,6 +102,14 @@ frame_10.png
 - frame 縮圖序列
 
 可以在影格序列中拖曳縮圖重新排序，排序操作會進入 undo 歷史。
+
+多 frame 操作方式：
+
+- 先點一個 frame，再按住 `Shift` 點另一個 frame，即可選取包含兩端的連續區間。
+- 拖曳任一已選縮圖，可將整段選取區間移動到新位置，區間內順序不變。
+- 建立矩形或繩索選取前開啟 **全 Frame 選取框**。影格列只選一幀時會同步全部 frame；選取兩幀以上時只同步目前選取區間。
+- 移動、縮放、旋轉、翻轉或刪除選取內容，會將相同變形套用到每個目標 frame；一次復原即可還原完整同步操作。
+- 選取區間後開啟動畫預覽，該區間會成為預設播放範圍。
 
 ### 圖層
 
@@ -281,6 +296,7 @@ matte_00003.png
 | `Ctrl+-` | 縮小 |
 | `Ctrl+0` | 畫布縮放回 100% |
 | `Ctrl + 滾輪` | 縮放游標所在的畫布或預覽 |
+| 在影格列 `Shift + 點擊`兩個 frame | 選取包含兩端的連續 frame 區間 |
 | `B` | 畫筆 |
 | `E` | 橡皮擦 |
 | `V` | 矩形選取 |

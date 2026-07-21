@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import QEvent, QSize, Qt, QThreadPool, QTimer
+from PySide6.QtCore import QEvent, QItemSelectionModel, QSize, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDragEnterEvent, QDropEvent, QIcon, QImage, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -164,6 +164,7 @@ class MainWindow(QMainWindow):
         self.layer_dock: Optional[QDockWidget] = None
         self.frame_dock: Optional[QDockWidget] = None
         self.spill_cleanup_dock: Optional[QDockWidget] = None
+        self._pending_frame_selection: Optional[List[int]] = None
         self._thumb_timer = QTimer(self)
         self._thumb_timer.setSingleShot(True)
         self._thumb_timer.timeout.connect(self.refresh_thumbnails)
@@ -187,10 +188,11 @@ class MainWindow(QMainWindow):
         self.thumbnails.setIconSize(QSize(64, 64))
         self.thumbnails.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.thumbnails.setMovement(QListWidget.Movement.Static)
-        self.thumbnails.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.thumbnails.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.thumbnails.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.thumbnails.currentRowChanged.connect(self.set_current_frame)
-        self.thumbnails.frame_reordered.connect(self.reorder_frame)
+        self.thumbnails.itemSelectionChanged.connect(self.update_synchronized_selection_targets)
+        self.thumbnails.frames_reordered.connect(self.reorder_frames)
 
         self.layers = QListWidget()
         self.layers.currentRowChanged.connect(self.set_active_layer_from_list)
@@ -349,8 +351,20 @@ class MainWindow(QMainWindow):
             btn = QPushButton(label)
             btn.clicked.connect(slot)
             frame_row.addWidget(btn)
+        self.sync_selection_toggle = QCheckBox("全 Frame 選取框")
+        self.sync_selection_toggle.setToolTip(
+            "開啟後，選取框的移動、縮放、旋轉、翻轉與刪除會同步套用；"
+            "影格列只選一幀時套用全部 frame，多選時只套用選取區間"
+        )
+        self.sync_selection_toggle.toggled.connect(self.toggle_synchronized_selection)
+        frame_row.addWidget(self.sync_selection_toggle)
         frame_row.addStretch(1)
         frame_layout.addLayout(frame_row)
+        selection_hint = QLabel("Shift + 點擊兩個 frame：選取包含端點的連續區間；拖曳可整組重新排序")
+        selection_hint.setStyleSheet("color:#555;")
+        frame_layout.addWidget(selection_hint)
+        self.sync_selection_status = QLabel("同步選取框：關閉")
+        frame_layout.addWidget(self.sync_selection_status)
         frame_layout.addWidget(self.thumbnails)
         self.frame_dock.setWidget(frame_panel)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.frame_dock)
@@ -744,22 +758,69 @@ class MainWindow(QMainWindow):
 
     def set_current_frame(self, index: int) -> None:
         if index < 0 or index >= len(self.frames) or index == self.current_index:
+            self.update_synchronized_selection_targets()
             return
         self.canvas.commit_floating_selection()
         self.current_index = index
         self.canvas.set_frame(self.current_frame)
+        self.update_synchronized_selection_targets()
         self.update_canvas_extent()
         self.refresh_layers()
         self.update_ui()
 
-    def reorder_frame(self, old: int, new: int) -> None:
-        if not self.frames or old < 0 or old >= len(self.frames) or new < 0 or new >= len(self.frames) or old == new:
+    def selected_frame_rows(self) -> List[int]:
+        return sorted({index.row() for index in self.thumbnails.selectedIndexes() if 0 <= index.row() < len(self.frames)})
+
+    def toggle_synchronized_selection(self, enabled: bool) -> None:
+        self.canvas.commit_floating_selection()
+        if enabled:
+            self.set_tool("select")
+        self.update_synchronized_selection_targets()
+        self.status.showMessage("已開啟全 Frame 選取框" if enabled else "已關閉全 Frame 選取框")
+
+    def update_synchronized_selection_targets(self) -> None:
+        if not hasattr(self, "sync_selection_toggle"):
             return
+        selected_rows = self.selected_frame_rows()
+        if not self.sync_selection_toggle.isChecked() or not self.frames:
+            self.canvas.set_batch_selection_frames([])
+            self.sync_selection_status.setText("同步選取框：關閉")
+            return
+        if len(selected_rows) > 1:
+            targets = [self.frames[row] for row in selected_rows]
+            self.sync_selection_status.setText(
+                f"同步選取框：已選 {len(targets)} 幀（{selected_rows[0] + 1} - {selected_rows[-1] + 1}）"
+            )
+        else:
+            targets = list(self.frames)
+            self.sync_selection_status.setText(f"同步選取框：全部 {len(targets)} 幀")
+        self.canvas.set_batch_selection_frames(targets)
+
+    def reorder_frames(self, rows: object, drop_row: int) -> None:
+        valid_rows = sorted({int(row) for row in rows if 0 <= int(row) < len(self.frames)}) if isinstance(rows, (list, tuple, set)) else []
+        if not self.frames or not valid_rows:
+            return
+        self.canvas.commit_floating_selection()
+        drop_row = max(0, min(int(drop_row), len(self.frames)))
+        moving_frames = [self.frames[row] for row in valid_rows]
+        moving_row_set = set(valid_rows)
+        remaining_frames = [frame for index, frame in enumerate(self.frames) if index not in moving_row_set]
+        insert_at = drop_row - sum(1 for row in valid_rows if row < drop_row)
+        insert_at = max(0, min(insert_at, len(remaining_frames)))
+        reordered = remaining_frames[:insert_at] + moving_frames + remaining_frames[insert_at:]
+        if all(before is after for before, after in zip(self.frames, reordered)):
+            return
+        current_frame = self.current_frame
         self.push_undo()
-        frame = self.frames.pop(old)
-        self.frames.insert(new, frame)
-        self.current_index = new
-        self.after_project_changed("影格順序已更新")
+        self.frames = reordered
+        if current_frame is not None:
+            self.current_index = next(index for index, frame in enumerate(self.frames) if frame is current_frame)
+        self._pending_frame_selection = list(range(insert_at, insert_at + len(moving_frames)))
+        self.after_project_changed(f"已移動 {len(moving_frames)} 個影格")
+
+    def reorder_frame(self, old: int, new: int) -> None:
+        drop_row = new if new < old else new + 1
+        self.reorder_frames([old], drop_row)
 
     def prev_frame(self) -> None:
         if self.current_index > 0:
@@ -1300,7 +1361,10 @@ class MainWindow(QMainWindow):
     def show_animation_preview(self) -> None:
         if not self.frames:
             return
-        dialog = AnimationDialog(self.frames, self)
+        selected_rows = self.selected_frame_rows()
+        start_index = selected_rows[0] if len(selected_rows) > 1 else 0
+        end_index = selected_rows[-1] if len(selected_rows) > 1 else len(self.frames) - 1
+        dialog = AnimationDialog(self.frames, self, start_index=start_index, end_index=end_index)
         dialog.show()
 
     def image_png_bytes(self, image: QImage) -> bytes:
@@ -1350,6 +1414,10 @@ class MainWindow(QMainWindow):
         self._thumb_timer.start(60)
 
     def refresh_thumbnails(self) -> None:
+        selected_rows = self._pending_frame_selection
+        if selected_rows is None:
+            selected_rows = self.selected_frame_rows()
+        self._pending_frame_selection = None
         self.thumbnails.blockSignals(True)
         self.thumbnails.clear()
         for index, frame in enumerate(self.frames):
@@ -1358,8 +1426,14 @@ class MainWindow(QMainWindow):
             item.setToolTip(frame.name)
             self.thumbnails.addItem(item)
         if self.frames:
-            self.thumbnails.setCurrentRow(self.current_index)
+            self.thumbnails.setCurrentRow(self.current_index, QItemSelectionModel.SelectionFlag.NoUpdate)
+            restored_rows = [row for row in selected_rows if 0 <= row < len(self.frames)]
+            if not restored_rows:
+                restored_rows = [self.current_index]
+            for row in restored_rows:
+                self.thumbnails.item(row).setSelected(True)
         self.thumbnails.blockSignals(False)
+        self.update_synchronized_selection_targets()
 
     def refresh_layers(self) -> None:
         frame = self.current_frame
@@ -1392,11 +1466,13 @@ class MainWindow(QMainWindow):
 
 
 class AnimationDialog(QWidget):
-    def __init__(self, frames: List[Frame], parent=None) -> None:
+    def __init__(self, frames: List[Frame], parent=None, start_index: int = 0, end_index: Optional[int] = None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self.setWindowTitle("動畫預覽")
         self.frames = frames
-        self.index = 0
+        start_index = max(0, min(start_index, len(frames) - 1))
+        end_index = len(frames) - 1 if end_index is None else max(start_index, min(end_index, len(frames) - 1))
+        self.index = start_index
         self.preview_zoom = 1.0
         self._syncing_frame_list = False
         self.label = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
@@ -1421,10 +1497,10 @@ class AnimationDialog(QWidget):
         self.fps_spin.setSuffix(" FPS")
         self.start_frame = QSpinBox()
         self.start_frame.setRange(1, len(frames))
-        self.start_frame.setValue(1)
+        self.start_frame.setValue(start_index + 1)
         self.end_frame = QSpinBox()
         self.end_frame.setRange(1, len(frames))
-        self.end_frame.setValue(len(frames))
+        self.end_frame.setValue(end_index + 1)
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setRange(10, 800)
         self.zoom_slider.setValue(100)
