@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
+import cv2
 import numpy as np
 from PySide6.QtGui import QColor, QImage
 
@@ -585,49 +586,107 @@ def contiguous_region(mask: np.ndarray, start_x: int, start_y: int) -> np.ndarra
     return visited
 
 
-def add_outline(image: QImage, color: QColor, thickness: int = 1) -> QImage:
-    arr = qimage_to_array(image)
-    alpha = arr[:, :, 3] > 0
-    if not np.any(alpha):
+def add_outline(
+    image: QImage,
+    color: QColor,
+    thickness: int = 1,
+) -> QImage:
+    thickness = max(0, int(thickness))
+    if thickness <= 0 or color.alpha() <= 0:
         return image.copy()
 
-    outline = np.zeros_like(alpha)
-    for dy in range(-thickness, thickness + 1):
-        for dx in range(-thickness, thickness + 1):
-            if dx == 0 and dy == 0:
-                continue
-            shifted = np.zeros_like(alpha)
-            src_y0 = max(0, -dy)
-            src_y1 = alpha.shape[0] - max(0, dy)
-            src_x0 = max(0, -dx)
-            src_x1 = alpha.shape[1] - max(0, dx)
-            dst_y0 = max(0, dy)
-            dst_y1 = alpha.shape[0] - max(0, -dy)
-            dst_x0 = max(0, dx)
-            dst_x1 = alpha.shape[1] - max(0, -dx)
-            shifted[dst_y0:dst_y1, dst_x0:dst_x1] = alpha[src_y0:src_y1, src_x0:src_x1]
-            outline |= shifted & ~alpha
+    arr = qimage_to_array(image)
+    source_mask = arr[:, :, 3] > 0
+    if not np.any(source_mask):
+        return image.copy()
 
-    rgba = np.array(qcolor_to_rgba(color), dtype=np.uint8)
-    arr[outline] = rgba
+    # Follow the visible 50% alpha contour instead of expanding every faint
+    # antialiasing pixel into a fully solid outline shape.
+    sprite_mask = arr[:, :, 3] >= 128
+    if not np.any(sprite_mask):
+        sprite_mask = source_mask
+
+    kernel_size = thickness * 2 + 1
+    expanded = cv2.dilate(
+        sprite_mask.astype(np.uint8),
+        np.ones((kernel_size, kernel_size), dtype=np.uint8),
+    )
+    # Composite the outline behind low-alpha antialiasing pixels. Excluding
+    # every alpha>0 source pixel would leave a visible transparent gap between
+    # the solid sprite contour and its outline.
+    outline_mask = (expanded > 0) & ~sprite_mask
+    source = arr[outline_mask].astype(np.float32)
+    if source.size == 0:
+        return array_to_qimage(arr)
+
+    outline_rgba = np.array(qcolor_to_rgba(color), dtype=np.float32)
+    source_alpha = source[:, 3] / 255.0
+    outline_alpha = float(outline_rgba[3]) / 255.0
+    output_alpha = source_alpha + outline_alpha * (1.0 - source_alpha)
+    source_premultiplied = source[:, :3] * source_alpha[:, None]
+    outline_premultiplied = (
+        outline_rgba[:3][None, :]
+        * outline_alpha
+        * (1.0 - source_alpha[:, None])
+    )
+    output_rgb = np.divide(
+        source_premultiplied + outline_premultiplied,
+        output_alpha[:, None],
+        out=np.zeros_like(source_premultiplied),
+        where=output_alpha[:, None] > 0.0,
+    )
+    arr[outline_mask, :3] = np.rint(np.clip(output_rgb, 0.0, 255.0)).astype(np.uint8)
+    arr[outline_mask, 3] = np.rint(np.clip(output_alpha * 255.0, 0.0, 255.0)).astype(np.uint8)
     return array_to_qimage(arr)
 
 
-def trim_alpha_edges(image: QImage, pixels: int = 1) -> QImage:
+def trim_alpha_edges(
+    image: QImage,
+    pixels: int = 1,
+    antialias: bool = True,
+    contour_smoothing: float = 1.0,
+) -> QImage:
     if pixels <= 0:
         return image.copy()
 
     arr = qimage_to_array(image)
     alpha = arr[:, :, 3] > 0
-    original_alpha = alpha.copy()
-
+    original_mask = alpha.copy()
     for _ in range(pixels):
         keep = alpha.copy()
-        # A square 3x3 kernel removes two staircase levels from 45-degree
-        # contours. Four-connected erosion removes exactly one pixel layer.
+        # Four-connected erosion removes exactly one contour layer at a time.
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             keep &= shift_mask(alpha, dx, dy)
         alpha = keep
 
-    arr[original_alpha & ~alpha, 3] = 0
+    if antialias and np.any(alpha):
+        contours, hierarchy = cv2.findContours(
+            alpha.astype(np.uint8),
+            cv2.RETR_CCOMP,
+            cv2.CHAIN_APPROX_NONE,
+        )
+        coverage = np.zeros(alpha.shape, dtype=np.uint8)
+        if contours:
+            epsilon = max(0.0, float(contour_smoothing))
+            if epsilon > 0.0:
+                contours = [
+                    cv2.approxPolyDP(contour, epsilon, True)
+                    if len(contour) >= 8
+                    else contour
+                    for contour in contours
+                ]
+            cv2.drawContours(
+                coverage,
+                contours,
+                -1,
+                255,
+                thickness=cv2.FILLED,
+                lineType=cv2.LINE_AA,
+                hierarchy=hierarchy,
+            )
+        original_alpha = arr[:, :, 3].astype(np.uint16)
+        arr[:, :, 3] = np.minimum(original_alpha, coverage.astype(np.uint16)).astype(np.uint8)
+        return array_to_qimage(arr)
+
+    arr[original_mask & ~alpha, 3] = 0
     return array_to_qimage(arr)

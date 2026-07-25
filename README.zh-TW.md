@@ -8,15 +8,27 @@ SpriteMaker PySide 是一款以 Python + PySide6 製作的本地 Windows 桌面�
 
 Windows 使用者可以從 GitHub Releases 下載已打包版本：
 
-- [SpriteMakerPySide-2.3.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.3.1-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 解壓縮後執行：
 
 ```text
-SpriteMakerPySide-2.3.0.exe
+SpriteMakerPySide-2.3.1.exe
 ```
 
 Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者不需要另外安裝 Python。
+
+## 2.3.1 更新重點
+
+- 將高記憶體用量的超取樣扣邊改為 OpenCV 原尺寸輪廓重繪，以抗鋸齒填滿輪廓處理新邊界。
+- 可關閉「扣邊抗鋸齒」，恢復適合 pixel art 的四方向硬式逐層扣除。
+- 新增可調整的 `0–2 px` 輪廓平滑，以最大偏差輪廓擬合拉直淺斜線階梯；預設 `1 px`，明顯尖角仍會保留。
+- 外框改沿扣邊後影像的 `50% Alpha` 輪廓生成，避免極淡抗鋸齒像素被放大成黑色階梯。
+- 外框改為合成在低 Alpha 邊緣像素下方，消除抗鋸齒扣邊與外框之間看似透明的間隙。
+- 移除獨立的外框平滑控制與 Gaussian 外框處理。
+- 進入編輯畫面時只預設開啟 frame 序列；圖層與邊緣融色修復面板維持關閉，使用時再由工具列開啟。
+- Spritesheet 預覽與儲存 PNG 使用相同的輪廓抗鋸齒結果。
+- Spritesheet 非 1:1 預覽縮放改用高品質平滑取樣，不再以快速近鄰式縮放放大鋸齒；儲存 PNG 的原始像素不受影響。
 
 ## 2.3.0 更新重點
 

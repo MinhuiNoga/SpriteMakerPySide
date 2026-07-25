@@ -108,6 +108,8 @@ def build_spritesheet_image(
     outline_pixels: int,
     outline_color: QColor,
     output_size: Optional[QSize] = None,
+    trim_antialias: bool = True,
+    trim_contour_smoothing: float = 1.0,
 ) -> QImage:
     images = []
     for frame in frames:
@@ -116,7 +118,12 @@ def build_spritesheet_image(
             center_x, center_y = frame.export_center
             image = cropped_canvas_image(image, output_size.width(), output_size.height(), center_x, center_y)
         if trim_pixels > 0:
-            image = trim_alpha_edges(image, trim_pixels)
+            image = trim_alpha_edges(
+                image,
+                trim_pixels,
+                antialias=trim_antialias,
+                contour_smoothing=trim_contour_smoothing,
+            )
         if outline_pixels > 0:
             image = add_outline(image, outline_color, outline_pixels)
         images.append(image)
@@ -574,7 +581,10 @@ class MainWindow(QMainWindow):
         self.spill_cleanup_dock.setWidget(spill_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.spill_cleanup_dock)
         self.tabifyDockWidget(self.layer_dock, self.spill_cleanup_dock)
-        self.layer_dock.raise_()
+        self.layer_dock.hide()
+        self.spill_cleanup_dock.hide()
+        self.frame_dock.show()
+        self.frame_dock.raise_()
         self.update_spill_cleanup_labels()
 
     def add_action(self, toolbar: QToolBar, label: str, slot, shortcut: Optional[str] = None, checkable: bool = False) -> QAction:
@@ -1897,13 +1907,30 @@ class SpritesheetPreviewDialog(QDialog):
         self.trim_pixels = QSpinBox()
         self.trim_pixels.setRange(0, 64)
         self.trim_pixels.setValue(0)
-        self.trim_pixels.setToolTip("每次扣除一圈與透明背景接觸的像素")
+        self.trim_pixels.setToolTip("將角色輪廓向內收縮指定的 pixel 距離")
         self.trim_pixels.valueChanged.connect(self.queue_update)
+
+        self.trim_antialias = QCheckBox("扣邊抗鋸齒")
+        self.trim_antialias.setChecked(True)
+        self.trim_antialias.setToolTip("扣邊後以 OpenCV 原尺寸抗鋸齒輪廓重繪新邊界")
+        self.trim_antialias.stateChanged.connect(self.queue_update)
+
+        self.trim_contour_smoothing = QDoubleSpinBox()
+        self.trim_contour_smoothing.setRange(0.0, 2.0)
+        self.trim_contour_smoothing.setSingleStep(0.25)
+        self.trim_contour_smoothing.setDecimals(2)
+        self.trim_contour_smoothing.setValue(1.0)
+        self.trim_contour_smoothing.setSuffix(" px")
+        self.trim_contour_smoothing.setToolTip("輪廓擬合的最大偏差；越高越平滑，尖角仍會保留")
+        self.trim_contour_smoothing.valueChanged.connect(self.queue_update)
+        self.trim_antialias.stateChanged.connect(
+            lambda state: self.trim_contour_smoothing.setEnabled(bool(state))
+        )
 
         self.outline_pixels = QSpinBox()
         self.outline_pixels.setRange(0, 64)
         self.outline_pixels.setValue(0)
-        self.outline_pixels.setToolTip("在與透明背景接觸的外側補黑線")
+        self.outline_pixels.setToolTip("在與透明背景接觸的外側補外框")
         self.outline_pixels.valueChanged.connect(self.queue_update)
 
         self.outline_enabled = QCheckBox("啟用外框")
@@ -1931,6 +1958,8 @@ class SpritesheetPreviewDialog(QDialog):
         if output_size is not None:
             controls.addRow("單格輸出尺寸", QLabel(f"{output_size.width()} x {output_size.height()}"))
         controls.addRow("扣除邊緣 pixel", self.trim_pixels)
+        controls.addRow("", self.trim_antialias)
+        controls.addRow("輪廓平滑", self.trim_contour_smoothing)
         controls.addRow(self.outline_enabled, self.outline_pixels)
         controls.addRow("", self.color_button)
         zoom_row = QHBoxLayout()
@@ -1989,6 +2018,8 @@ class SpritesheetPreviewDialog(QDialog):
             outline,
             self.outline_color,
             self.output_size,
+            self.trim_antialias.isChecked(),
+            self.trim_contour_smoothing.value(),
         )
         self.apply_preview_zoom()
 
@@ -2004,7 +2035,7 @@ class SpritesheetPreviewDialog(QDialog):
                 max(1, round(pixmap.width() * self.preview_zoom)),
                 max(1, round(pixmap.height() * self.preview_zoom)),
                 Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.FastTransformation,
+                Qt.TransformationMode.SmoothTransformation,
             )
         self.preview.setPixmap(pixmap)
         self.preview.resize(pixmap.size())

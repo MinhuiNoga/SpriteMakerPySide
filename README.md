@@ -8,15 +8,27 @@ SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor bu
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.3.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.3.1-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.3.0.exe
+SpriteMakerPySide-2.3.1.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 2.3.1
+
+- Replaces memory-heavy supersampled trimming with native-resolution OpenCV contour rerasterization using antialiased filled contours.
+- Edge-trim antialiasing can be disabled to retain exact four-connected hard pixel-layer removal for pixel art.
+- Adds adjustable `0–2 px` contour smoothing based on maximum-deviation polygon fitting; `1 px` is the default for straightening shallow digital stair steps while retaining pronounced corners.
+- Outline generation follows the trimmed image's 50% alpha contour, preventing faint antialiasing pixels from becoming enlarged black stair steps.
+- Outlines are alpha-composited behind low-opacity edge pixels, eliminating the transparent-looking gap between an antialiased trimmed contour and its outline.
+- Removes the separate outline-smoothing control and its Gaussian processing.
+- Opens the editor with only the frame-sequence dock visible; Layers and Edge Spill Cleanup remain closed until requested.
+- Spritesheet preview and saved PNG use the same contour-antialiased result.
+- Non-1:1 Spritesheet preview zoom now uses high-quality smooth resampling instead of nearest-style fast scaling; saved PNG pixels remain unchanged.
 
 ## What's New In 2.3.0
 
