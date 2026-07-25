@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QSize, Qt, QThreadPool, QTimer
+from PySide6.QtCore import QEvent, QItemSelectionModel, QRect, QRectF, QSize, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDragEnterEvent, QDropEvent, QIcon, QImage, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -113,7 +113,8 @@ def build_spritesheet_image(
     for frame in frames:
         image = frame.composite()
         if output_size is not None:
-            image = centered_canvas_image(image, output_size.width(), output_size.height())
+            center_x, center_y = frame.export_center
+            image = cropped_canvas_image(image, output_size.width(), output_size.height(), center_x, center_y)
         if trim_pixels > 0:
             image = trim_alpha_edges(image, trim_pixels)
         if outline_pixels > 0:
@@ -137,12 +138,43 @@ def build_spritesheet_image(
     return sheet
 
 
-def centered_canvas_image(image: QImage, width: int, height: int) -> QImage:
+def cropped_canvas_image(image: QImage, width: int, height: int, center_x: float, center_y: float) -> QImage:
     output = make_blank_image(width, height)
+    source_left = round(center_x - width / 2)
+    source_top = round(center_y - height / 2)
     painter = QPainter(output)
-    painter.drawImage((width - image.width()) // 2, (height - image.height()) // 2, image)
+    painter.drawImage(-source_left, -source_top, image)
     painter.end()
     return output
+
+
+def scaled_export_thumbnail(frame: Frame, output_size: QSize, maximum_size: QSize) -> QImage:
+    output_width = max(1, output_size.width())
+    output_height = max(1, output_size.height())
+    scale = min(maximum_size.width() / output_width, maximum_size.height() / output_height)
+    preview_width = max(1, round(output_width * scale))
+    preview_height = max(1, round(output_height * scale))
+    preview = make_blank_image(preview_width, preview_height)
+
+    image = frame.composite()
+    center_x, center_y = frame.export_center
+    source_left = round(center_x - output_width / 2)
+    source_top = round(center_y - output_height / 2)
+    source_rect = QRect(source_left, source_top, output_width, output_height).intersected(image.rect())
+    if source_rect.isEmpty():
+        return preview
+
+    target_rect = QRectF(
+        (source_rect.left() - source_left) * scale,
+        (source_rect.top() - source_top) * scale,
+        source_rect.width() * scale,
+        source_rect.height() * scale,
+    )
+    painter = QPainter(preview)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+    painter.drawImage(target_rect, image, QRectF(source_rect))
+    painter.end()
+    return preview
 
 
 class MainWindow(QMainWindow):
@@ -177,6 +209,7 @@ class MainWindow(QMainWindow):
         self.canvas.universal_erase_requested.connect(self.run_universal_erase)
         self.canvas.color_sampled.connect(self.set_sampled_color)
         self.canvas.zoom_changed.connect(self.on_canvas_zoom_changed)
+        self.canvas.workspace_expansion_requested.connect(self.expand_workspace)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(False)
@@ -292,6 +325,64 @@ class MainWindow(QMainWindow):
         self.checker_bg_toggle.stateChanged.connect(self.toggle_checker_background)
         settings_toolbar.addWidget(self.checker_bg_toggle)
 
+        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+        blend_toolbar = self.make_toolbar("像素融色畫筆", Qt.ToolBarArea.TopToolBarArea)
+        self.pixel_blend_toggle = QCheckBox("像素融色")
+        self.pixel_blend_toggle.setToolTip("只影響畫筆；讓筆畫邊緣融合附近既有像素顏色")
+        blend_toolbar.addWidget(self.pixel_blend_toggle)
+
+        blend_toolbar.addWidget(QLabel("強度"))
+        self.pixel_blend_strength_spin = QSpinBox()
+        self.pixel_blend_strength_spin.setRange(0, 100)
+        self.pixel_blend_strength_spin.setValue(75)
+        self.pixel_blend_strength_spin.setSuffix("%")
+        self.pixel_blend_strength_spin.setToolTip("邊緣採用附近顏色的比例")
+        blend_toolbar.addWidget(self.pixel_blend_strength_spin)
+
+        blend_toolbar.addWidget(QLabel("邊緣"))
+        self.pixel_blend_edge_spin = QSpinBox()
+        self.pixel_blend_edge_spin.setRange(1, 8)
+        self.pixel_blend_edge_spin.setValue(2)
+        self.pixel_blend_edge_spin.setSuffix(" px")
+        self.pixel_blend_edge_spin.setToolTip("筆畫外圍參與融色的寬度")
+        blend_toolbar.addWidget(self.pixel_blend_edge_spin)
+
+        blend_toolbar.addWidget(QLabel("取樣"))
+        self.pixel_blend_radius_spin = QSpinBox()
+        self.pixel_blend_radius_spin.setRange(1, 16)
+        self.pixel_blend_radius_spin.setValue(5)
+        self.pixel_blend_radius_spin.setSuffix(" px")
+        self.pixel_blend_radius_spin.setToolTip("尋找附近既有顏色的半徑")
+        blend_toolbar.addWidget(self.pixel_blend_radius_spin)
+
+        self.pixel_blend_source_combo = QComboBox()
+        self.pixel_blend_source_combo.addItem("目前圖層", "layer")
+        self.pixel_blend_source_combo.addItem("所有可見圖層", "visible")
+        self.pixel_blend_source_combo.setCurrentIndex(1)
+        self.pixel_blend_source_combo.setToolTip("決定融色時從哪裡讀取鄰近顏色")
+        blend_toolbar.addWidget(self.pixel_blend_source_combo)
+
+        self.pixel_blend_transparent_toggle = QCheckBox("透明淡邊")
+        self.pixel_blend_transparent_toggle.setToolTip(
+            "開啟後，透明鄰近像素會降低筆畫邊緣 Alpha；關閉時透明像素不參與融色"
+        )
+        blend_toolbar.addWidget(self.pixel_blend_transparent_toggle)
+
+        self.pixel_blend_setting_widgets = [
+            self.pixel_blend_strength_spin,
+            self.pixel_blend_edge_spin,
+            self.pixel_blend_radius_spin,
+            self.pixel_blend_source_combo,
+            self.pixel_blend_transparent_toggle,
+        ]
+        self.pixel_blend_toggle.toggled.connect(self.update_pixel_blend_settings)
+        self.pixel_blend_strength_spin.valueChanged.connect(self.update_pixel_blend_settings)
+        self.pixel_blend_edge_spin.valueChanged.connect(self.update_pixel_blend_settings)
+        self.pixel_blend_radius_spin.valueChanged.connect(self.update_pixel_blend_settings)
+        self.pixel_blend_source_combo.currentIndexChanged.connect(self.update_pixel_blend_settings)
+        self.pixel_blend_transparent_toggle.toggled.connect(self.update_pixel_blend_settings)
+        self.update_pixel_blend_settings()
+
         edit_toolbar = self.make_toolbar("編輯與影格", Qt.ToolBarArea.TopToolBarArea)
         self.add_action(edit_toolbar, "復原", self.undo, "Ctrl+Z")
         self.add_action(edit_toolbar, "重做", self.redo, "Ctrl+Shift+Z")
@@ -302,7 +393,19 @@ class MainWindow(QMainWindow):
         self.add_action(edit_toolbar, "水平翻轉", lambda: self.canvas.flip_floating_selection(True), "H")
         self.add_action(edit_toolbar, "垂直翻轉", lambda: self.canvas.flip_floating_selection(False), "Shift+H")
         self.add_action(edit_toolbar, "刪除選取", self.delete_selected_or_frame, "Del")
+        edit_toolbar.addSeparator()
+        edit_toolbar.addWidget(QLabel("變形品質"))
+        self.transform_quality_combo = QComboBox()
+        self.transform_quality_combo.addItem("平滑", "smooth")
+        self.transform_quality_combo.addItem("像素銳利", "pixel")
+        self.transform_quality_combo.setToolTip(
+            "平滑：縮放與旋轉使用插值以減少撕裂；像素銳利：保留 nearest-neighbor 像素邊緣"
+        )
+        self.transform_quality_combo.currentIndexChanged.connect(self.update_transform_quality)
+        edit_toolbar.addWidget(self.transform_quality_combo)
+        self.update_transform_quality()
 
+        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
         output_toolbar = self.make_toolbar("輸出與視窗", Qt.ToolBarArea.TopToolBarArea)
         self.add_action(output_toolbar, "Spritesheet", self.export_spritesheet)
         self.add_action(output_toolbar, "動畫預覽", self.show_animation_preview)
@@ -844,10 +947,21 @@ class MainWindow(QMainWindow):
     def delete_frame(self) -> None:
         if not self.frames:
             return
+        selected_rows = self.selected_frame_rows()
+        rows = selected_rows or [self.current_index]
+        rows = sorted({row for row in rows if 0 <= row < len(self.frames)})
+        if not rows:
+            return
+        self.canvas.commit_floating_selection()
         self.push_undo()
-        del self.frames[self.current_index]
-        self.current_index = max(0, min(self.current_index, len(self.frames) - 1))
-        self.after_project_changed("已刪除影格")
+        row_set = set(rows)
+        self.frames = [frame for index, frame in enumerate(self.frames) if index not in row_set]
+        self.current_index = min(rows[0], len(self.frames) - 1) if self.frames else 0
+        self._pending_frame_selection = [self.current_index] if self.frames else []
+        if not self.frames:
+            self._export_size_initialized = False
+        count = len(rows)
+        self.after_project_changed(f"已刪除 {count} 個影格" if count > 1 else "已刪除影格")
 
     def clear_project(self) -> None:
         if self.frames and QMessageBox.question(self, "清空", "確定清空所有影格？") != QMessageBox.StandardButton.Yes:
@@ -977,6 +1091,33 @@ class MainWindow(QMainWindow):
 
     def set_brush_size(self, value: int) -> None:
         self.canvas.brush_size = value
+
+    def update_transform_quality(self) -> None:
+        smooth = self.transform_quality_combo.currentData() == "smooth"
+        self.canvas.smooth_selection_transform = smooth
+        self.canvas.update()
+        self.status.showMessage("變形品質：平滑" if smooth else "變形品質：像素銳利")
+
+    def update_pixel_blend_settings(self) -> None:
+        enabled = self.pixel_blend_toggle.isChecked()
+        self.canvas.pixel_blend_enabled = enabled
+        self.canvas.pixel_blend_strength = self.pixel_blend_strength_spin.value() / 100.0
+        self.canvas.pixel_blend_edge_width = self.pixel_blend_edge_spin.value()
+        self.canvas.pixel_blend_sample_radius = self.pixel_blend_radius_spin.value()
+        self.canvas.pixel_blend_sample_visible_layers = (
+            self.pixel_blend_source_combo.currentData() == "visible"
+        )
+        self.canvas.pixel_blend_include_transparent = self.pixel_blend_transparent_toggle.isChecked()
+        for widget in self.pixel_blend_setting_widgets:
+            widget.setEnabled(enabled)
+        self.canvas.update()
+        if enabled:
+            self.status.showMessage(
+                "像素融色畫筆："
+                f"強度 {self.pixel_blend_strength_spin.value()}%、"
+                f"邊緣 {self.pixel_blend_edge_spin.value()}px、"
+                f"取樣 {self.pixel_blend_radius_spin.value()}px"
+            )
 
     def set_tolerance(self, value: int) -> None:
         self.canvas.tolerance = value
@@ -1211,6 +1352,13 @@ class MainWindow(QMainWindow):
         self.canvas.paste_selection()
 
     def delete_selected_or_frame(self) -> None:
+        focus = QApplication.focusWidget()
+        timeline_focused = focus is self.thumbnails or (
+            focus is not None and self.thumbnails.isAncestorOf(focus)
+        )
+        if timeline_focused and self.selected_frame_rows():
+            self.delete_frame()
+            return
         if self.canvas.delete_selection():
             return
         self.delete_frame()
@@ -1235,7 +1383,8 @@ class MainWindow(QMainWindow):
 
     def export_frame_image(self, frame: Frame) -> QImage:
         size = self.export_size()
-        return centered_canvas_image(frame.composite(), size.width(), size.height())
+        center_x, center_y = frame.export_center
+        return cropped_canvas_image(frame.composite(), size.width(), size.height(), center_x, center_y)
 
     def push_undo(self) -> None:
         if not self.frames:
@@ -1364,7 +1513,13 @@ class MainWindow(QMainWindow):
         selected_rows = self.selected_frame_rows()
         start_index = selected_rows[0] if len(selected_rows) > 1 else 0
         end_index = selected_rows[-1] if len(selected_rows) > 1 else len(self.frames) - 1
-        dialog = AnimationDialog(self.frames, self, start_index=start_index, end_index=end_index)
+        dialog = AnimationDialog(
+            self.frames,
+            self,
+            start_index=start_index,
+            end_index=end_index,
+            output_size=self.export_size(),
+        )
         dialog.show()
 
     def image_png_bytes(self, image: QImage) -> bytes:
@@ -1399,7 +1554,47 @@ class MainWindow(QMainWindow):
         width = max(hint.width(), viewport.width())
         height = max(hint.height(), viewport.height())
         self.canvas.resize(width, height)
+        self.canvas.sync_image_rect_to_workspace()
         self.canvas.update()
+
+    def expand_workspace(self, left: int, top: int, right: int, bottom: int) -> None:
+        left = max(0, int(left))
+        top = max(0, int(top))
+        right = max(0, int(right))
+        bottom = max(0, int(bottom))
+        if not self.frames or not any((left, top, right, bottom)):
+            return
+
+        horizontal_scroll = self.scroll.horizontalScrollBar()
+        vertical_scroll = self.scroll.verticalScrollBar()
+        old_horizontal = horizontal_scroll.value()
+        old_vertical = vertical_scroll.value()
+        old_anchor = self.canvas.export_center_view_position()
+
+        for frame in self.frames:
+            center_x, center_y = frame.export_center
+            new_width = frame.width + left + right
+            new_height = frame.height + top + bottom
+            for layer in frame.layers:
+                expanded = make_blank_image(new_width, new_height)
+                painter = QPainter(expanded)
+                painter.drawImage(left, top, layer.image)
+                painter.end()
+                layer.image = expanded
+            frame.export_center_x = center_x + left
+            frame.export_center_y = center_y + top
+            frame.mark_dirty()
+
+        self.canvas.shift_workspace_coordinates(left, top)
+        self.canvas.set_debug_overlay(None)
+        self.update_canvas_extent()
+        new_anchor = self.canvas.export_center_view_position()
+        horizontal_scroll.setValue(old_horizontal + round(new_anchor.x() - old_anchor.x()))
+        vertical_scroll.setValue(old_vertical + round(new_anchor.y() - old_anchor.y()))
+        self.schedule_thumbnail_refresh()
+        self.status.showMessage(
+            f"工作區已擴張：左 {left}px、上 {top}px、右 {right}px、下 {bottom}px；輸出黑框不變"
+        )
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -1421,7 +1616,8 @@ class MainWindow(QMainWindow):
         self.thumbnails.blockSignals(True)
         self.thumbnails.clear()
         for index, frame in enumerate(self.frames):
-            icon = QIcon(QPixmap.fromImage(frame.composite().scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)))
+            thumbnail = scaled_export_thumbnail(frame, self.export_size(), QSize(64, 64))
+            icon = QIcon(QPixmap.fromImage(thumbnail))
             item = QListWidgetItem(icon, str(index + 1))
             item.setToolTip(frame.name)
             self.thumbnails.addItem(item)
@@ -1466,10 +1662,18 @@ class MainWindow(QMainWindow):
 
 
 class AnimationDialog(QWidget):
-    def __init__(self, frames: List[Frame], parent=None, start_index: int = 0, end_index: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        frames: List[Frame],
+        parent=None,
+        start_index: int = 0,
+        end_index: Optional[int] = None,
+        output_size: Optional[QSize] = None,
+    ) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self.setWindowTitle("動畫預覽")
         self.frames = frames
+        self.output_size = QSize(output_size) if output_size is not None else None
         start_index = max(0, min(start_index, len(frames) - 1))
         end_index = len(frames) - 1 if end_index is None else max(start_index, min(end_index, len(frames) - 1))
         self.index = start_index
@@ -1557,11 +1761,15 @@ class AnimationDialog(QWidget):
         self.frame_list.blockSignals(True)
         self.frame_list.clear()
         for index, frame in enumerate(self.frames):
-            pixmap = QPixmap.fromImage(frame.composite()).scaled(
-                self.frame_list.iconSize(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.FastTransformation,
-            )
+            if self.output_size is None:
+                thumbnail = frame.composite().scaled(
+                    self.frame_list.iconSize(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.FastTransformation,
+                )
+            else:
+                thumbnail = scaled_export_thumbnail(frame, self.output_size, self.frame_list.iconSize())
+            pixmap = QPixmap.fromImage(thumbnail)
             item = QListWidgetItem(QIcon(pixmap), str(index + 1))
             item.setToolTip(frame.name)
             self.frame_list.addItem(item)
@@ -1604,7 +1812,7 @@ class AnimationDialog(QWidget):
         self.draw()
 
     def draw(self) -> None:
-        image = self.frames[self.index].composite()
+        image = self.preview_image(self.frames[self.index])
         pixmap = QPixmap.fromImage(image)
         if self.preview_zoom != 1.0:
             pixmap = pixmap.scaled(
@@ -1622,6 +1830,19 @@ class AnimationDialog(QWidget):
             if current_item is not None:
                 self.frame_list.scrollToItem(current_item)
             self._syncing_frame_list = False
+
+    def preview_image(self, frame: Frame) -> QImage:
+        image = frame.composite()
+        if self.output_size is None:
+            return image
+        center_x, center_y = frame.export_center
+        return cropped_canvas_image(
+            image,
+            self.output_size.width(),
+            self.output_size.height(),
+            center_x,
+            center_y,
+        )
 
     def normalize_range(self) -> None:
         if self.start_frame.value() > self.end_frame.value():

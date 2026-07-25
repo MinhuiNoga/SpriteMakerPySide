@@ -3,11 +3,13 @@ from __future__ import annotations
 import math
 from typing import List, Optional
 
+import cv2
+import numpy as np
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QImage, QMouseEvent, QPainter, QPainterPath, QPen, QTransform
 from PySide6.QtWidgets import QListWidget, QWidget
 
-from .image_ops import erase_color, flood_fill, qcolor_to_rgba
+from .image_ops import erase_color, flood_fill, qcolor_to_rgba, qimage_to_array
 from .models import Frame
 
 
@@ -122,6 +124,7 @@ class CanvasWidget(QWidget):
     color_sampled = Signal(QColor)
     status_changed = Signal(str)
     zoom_changed = Signal(float)
+    workspace_expansion_requested = Signal(int, int, int, int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -131,6 +134,18 @@ class CanvasWidget(QWidget):
         self.brush_size = 8
         self.tolerance = 15
         self.color = QColor("#ff0000")
+        self.pixel_blend_enabled = False
+        self.pixel_blend_strength = 0.75
+        self.pixel_blend_edge_width = 2
+        self.pixel_blend_sample_radius = 5
+        self.pixel_blend_sample_visible_layers = True
+        self.pixel_blend_include_transparent = False
+        self._brush_source_array: Optional[np.ndarray] = None
+        self._brush_fallback_source_array: Optional[np.ndarray] = None
+        self._brush_base_layer_array: Optional[np.ndarray] = None
+        self._brush_stroke_mask: Optional[np.ndarray] = None
+        self._brush_edge_factor: Optional[np.ndarray] = None
+        self._brush_blended_mask: Optional[np.ndarray] = None
         self.zoom = 1.0
         self.show_axes = False
         self.bg_color = QColor("#808080")
@@ -155,15 +170,20 @@ class CanvasWidget(QWidget):
         self.floating_flip_y = False
         self.floating_scale_x = 1.0
         self.floating_scale_y = 1.0
+        self.smooth_selection_transform = True
         self._dragging_floating = False
         self._floating_drag_offset = QPointF(0, 0)
         self._rotating_floating = False
         self._rotation_start_angle = 0.0
-        self._rotation_start_mouse_angle = 0.0
+        self._rotation_start_center = QPointF(0, 0)
+        self._rotation_start_vector = QPointF(1, 0)
+        self._rotation_workspace_offset = QPointF(0, 0)
         self._resizing_floating = False
         self._resize_handle = ""
         self._resize_start_scale = (1.0, 1.0)
         self._resize_start_distance = QPointF(1.0, 1.0)
+        self._resize_start_inverse = QTransform()
+        self._resize_workspace_offset = QPointF(0, 0)
         self.setMinimumSize(760, 520)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._update_cursor()
@@ -172,7 +192,12 @@ class CanvasWidget(QWidget):
         self.frame = frame
         self._drawing = False
         self._last_pos = None
+        self._clear_brush_stroke_state()
         self._dragging_floating = False
+        self._resizing_floating = False
+        self._rotating_floating = False
+        self._resize_workspace_offset = QPointF(0, 0)
+        self._rotation_workspace_offset = QPointF(0, 0)
         self.floating_image = None
         self.batch_floating_images = []
         self.selection_rect = None
@@ -199,9 +224,35 @@ class CanvasWidget(QWidget):
             targets.insert(0, self.frame)
         return targets
 
+    def shift_workspace_coordinates(self, dx: int, dy: int) -> None:
+        if self.selection_rect is not None:
+            self.selection_rect.translate(dx, dy)
+        if self.lasso_points:
+            self.lasso_points = [QPoint(point.x() + dx, point.y() + dy) for point in self.lasso_points]
+        if self.floating_image is not None:
+            self.floating_pos += QPointF(dx, dy)
+        if hasattr(self, "clipboard_pos"):
+            self.clipboard_pos += QPoint(dx, dy)
+        if self._selection_start is not None:
+            self._selection_start += QPoint(dx, dy)
+        if self._last_pos is not None:
+            self._last_pos += QPoint(dx, dy)
+        if self._hover_pos is not None:
+            self._hover_pos += QPoint(dx, dy)
+        if self._resizing_floating:
+            self._resize_workspace_offset += QPointF(dx, dy)
+        if self._rotating_floating:
+            self._rotation_workspace_offset += QPointF(dx, dy)
+        self._expand_brush_stroke_state(dx, dy)
+        self.sync_image_rect_to_workspace()
+        self.updateGeometry()
+        self.update()
+
     def set_tool(self, tool: str) -> None:
         if tool not in {"select", "lasso"}:
             self.commit_floating_selection()
+        if tool != self.tool:
+            self._clear_brush_stroke_state()
         self.tool = tool
         self._update_cursor()
         self.status_changed.emit(f"工具：{tool}")
@@ -224,12 +275,13 @@ class CanvasWidget(QWidget):
     def sizeHint(self):
         if not self.frame:
             return super().sizeHint()
-        width = self.frame.width
-        height = self.frame.height
+        center_x, center_y = self.frame.export_center
+        horizontal_extent = max(center_x, self.frame.width - center_x)
+        vertical_extent = max(center_y, self.frame.height - center_y)
         if self.export_size is not None:
-            width = max(width, self.export_size.width())
-            height = max(height, self.export_size.height())
-        return QSize(int(width * self.zoom + 220), int(height * self.zoom + 220))
+            horizontal_extent = max(horizontal_extent, self.export_size.width() / 2)
+            vertical_extent = max(vertical_extent, self.export_size.height() / 2)
+        return QSize(int(horizontal_extent * 2 * self.zoom + 220), int(vertical_extent * 2 * self.zoom + 220))
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -249,12 +301,11 @@ class CanvasWidget(QWidget):
         draw_h = image.height() * self.zoom
         export_w = self.export_size.width() * self.zoom if self.export_size else draw_w
         export_h = self.export_size.height() * self.zoom if self.export_size else draw_h
-        left = max(80.0, (self.width() - draw_w) / 2.0)
-        top = max(80.0, (self.height() - draw_h) / 2.0)
-        self._image_rect = QRectF(left, top, draw_w, draw_h)
+        export_center_x, export_center_y = self.frame.export_center
+        self.sync_image_rect_to_workspace()
         output_rect = QRectF(
-            self._image_rect.center().x() - export_w / 2,
-            self._image_rect.center().y() - export_h / 2,
+            self._image_rect.left() + export_center_x * self.zoom - export_w / 2,
+            self._image_rect.top() + export_center_y * self.zoom - export_h / 2,
             export_w,
             export_h,
         )
@@ -274,14 +325,34 @@ class CanvasWidget(QWidget):
 
         if self.show_axes:
             painter.setPen(QPen(QColor(255, 255, 255, 160), 1, Qt.PenStyle.DashLine))
-            cx = self._image_rect.center().x()
-            cy = self._image_rect.center().y()
+            cx = self._image_rect.left() + export_center_x * self.zoom
+            cy = self._image_rect.top() + export_center_y * self.zoom
             painter.drawLine(QPointF(cx, self._image_rect.top()), QPointF(cx, self._image_rect.bottom()))
             painter.drawLine(QPointF(self._image_rect.left(), cy), QPointF(self._image_rect.right(), cy))
 
         painter.setPen(QPen(QColor("#222"), 1))
         painter.drawRect(self._image_rect)
         painter.end()
+
+    def export_center_view_position(self) -> QPointF:
+        if self.frame is None:
+            return QPointF(self.width() / 2, self.height() / 2)
+        center_x, center_y = self.frame.export_center
+        left = self.width() / 2.0 - center_x * self.zoom
+        top = self.height() / 2.0 - center_y * self.zoom
+        return QPointF(left + center_x * self.zoom, top + center_y * self.zoom)
+
+    def sync_image_rect_to_workspace(self) -> None:
+        if self.frame is None:
+            self._image_rect = QRectF()
+            return
+        center_x, center_y = self.frame.export_center
+        self._image_rect = QRectF(
+            self.width() / 2.0 - center_x * self.zoom,
+            self.height() / 2.0 - center_y * self.zoom,
+            self.frame.width * self.zoom,
+            self.frame.height * self.zoom,
+        )
 
     def wheelEvent(self, event) -> None:
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -308,7 +379,9 @@ class CanvasWidget(QWidget):
                 self._resizing_floating = True
                 self._resize_handle = resize_handle
                 self._resize_start_scale = (self.floating_scale_x, self.floating_scale_y)
-                local = self._floating_transform().inverted()[0].map(self._view_to_image_point(event.position()))
+                self._resize_start_inverse = self._floating_transform().inverted()[0]
+                self._resize_workspace_offset = QPointF(0, 0)
+                local = self._resize_start_inverse.map(self._view_to_image_point(event.position()))
                 center = QPointF(self.floating_image.width() / 2, self.floating_image.height() / 2)
                 self._resize_start_distance = QPointF(max(1.0, abs(local.x() - center.x())), max(1.0, abs(local.y() - center.y())))
                 self.status_changed.emit("拖曳縮放控制點")
@@ -321,10 +394,28 @@ class CanvasWidget(QWidget):
                 center = self._floating_center_image()
                 mouse = self._view_to_image_point(event.position())
                 self._rotation_start_angle = self.floating_rotation
-                self._rotation_start_mouse_angle = math.degrees(math.atan2(mouse.y() - center.y(), mouse.x() - center.x()))
+                self._rotation_start_center = QPointF(center)
+                self._rotation_start_vector = mouse - center
+                self._rotation_workspace_offset = QPointF(0, 0)
                 self.status_changed.emit("拖曳旋轉控制點")
             return
-        pos = self._event_to_image_pos(event)
+        if self.tool in {"select", "lasso"} and (
+            self.floating_image is not None or self.has_active_selection()
+        ):
+            selection_pos = self._event_to_image_pos(event)
+            point_is_inside = (
+                selection_pos is not None
+                and (
+                    self._point_in_floating(selection_pos)
+                    if self.floating_image is not None
+                    else self._point_in_selection(selection_pos)
+                )
+            )
+            if not point_is_inside:
+                self.finish_active_selection()
+                return
+        allow_expansion = self.floating_image is not None or self.tool in {"pen", "eraser", "fill", "select", "lasso"}
+        pos = self._event_to_image_pos(event, allow_expansion=allow_expansion)
         if pos is None:
             return
 
@@ -346,6 +437,7 @@ class CanvasWidget(QWidget):
             self.editing_started.emit()
             self._drawing = True
             self._last_pos = pos
+            self._begin_brush_stroke()
             self._draw_line(pos, pos)
         elif self.tool == "fill":
             self.commit_floating_selection()
@@ -396,34 +488,53 @@ class CanvasWidget(QWidget):
             self.update()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        self._hover_pos = self._event_to_image_pos(event)
+        allow_expansion = self._drawing or self._dragging_floating or self._selecting
+        self._hover_pos = self._event_to_image_pos(event, allow_expansion=allow_expansion)
         self._update_cursor()
         if self._resizing_floating and self.floating_image is not None:
-            local = self._floating_transform().inverted()[0].map(self._view_to_image_point(event.position()))
+            mouse = self._view_to_image_point(event.position()) - self._resize_workspace_offset
+            local = self._resize_start_inverse.map(mouse)
             center = QPointF(self.floating_image.width() / 2, self.floating_image.height() / 2)
             dx = max(1.0, abs(local.x() - center.x()))
             dy = max(1.0, abs(local.y() - center.y()))
-            sx = max(0.05, self._resize_start_scale[0] * dx / self._resize_start_distance.x())
-            sy = max(0.05, self._resize_start_scale[1] * dy / self._resize_start_distance.y())
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                uniform = max(sx, sy)
-                sx = uniform
-                sy = uniform
+                start_radius = math.hypot(
+                    self._resize_start_distance.x(),
+                    self._resize_start_distance.y(),
+                )
+                current_radius = math.hypot(dx, dy)
+                ratio = current_radius / max(1.0, start_radius)
+                sx = max(0.05, self._resize_start_scale[0] * ratio)
+                sy = max(0.05, self._resize_start_scale[1] * ratio)
+            else:
+                sx = max(0.05, self._resize_start_scale[0] * dx / self._resize_start_distance.x())
+                sy = max(0.05, self._resize_start_scale[1] * dy / self._resize_start_distance.y())
             self.floating_scale_x = sx
             self.floating_scale_y = sy
+            self.ensure_floating_within_workspace()
             self.status_changed.emit(f"浮動選取縮放：{self.floating_scale_x:.2f} x {self.floating_scale_y:.2f}")
             self.update()
             return
         if self._rotating_floating and self.floating_image is not None:
-            center = self._floating_center_image()
-            mouse = self._view_to_image_point(event.position())
-            angle = math.degrees(math.atan2(mouse.y() - center.y(), mouse.x() - center.x()))
-            self.floating_rotation = (self._rotation_start_angle + angle - self._rotation_start_mouse_angle) % 360
+            mouse = self._view_to_image_point(event.position()) - self._rotation_workspace_offset
+            current_vector = mouse - self._rotation_start_center
+            cross = (
+                self._rotation_start_vector.x() * current_vector.y()
+                - self._rotation_start_vector.y() * current_vector.x()
+            )
+            dot = (
+                self._rotation_start_vector.x() * current_vector.x()
+                + self._rotation_start_vector.y() * current_vector.y()
+            )
+            angle_delta = math.degrees(math.atan2(cross, dot))
+            self.floating_rotation = (self._rotation_start_angle + angle_delta) % 360.0
+            self.ensure_floating_within_workspace()
             self.status_changed.emit(f"浮動選取角度：{self.floating_rotation:.1f}°")
             self.update()
             return
         if self._dragging_floating and self.floating_image is not None and self._hover_pos is not None:
             self.floating_pos = QPointF(self._hover_pos) - self._floating_drag_offset
+            self.ensure_floating_within_workspace()
             self.update()
             return
         if self._selecting and self.frame and self._hover_pos is not None:
@@ -437,7 +548,7 @@ class CanvasWidget(QWidget):
         if not self._drawing or not self.frame:
             self.update()
             return
-        pos = self._event_to_image_pos(event)
+        pos = self._hover_pos
         if pos is None or self._last_pos is None:
             return
         self._draw_line(self._last_pos, pos)
@@ -447,11 +558,13 @@ class CanvasWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self._resizing_floating:
             self._resizing_floating = False
             self._resize_handle = ""
+            self._resize_workspace_offset = QPointF(0, 0)
             self.status_changed.emit("已縮放浮動選取")
             self.update()
             return
         if event.button() == Qt.MouseButton.LeftButton and self._rotating_floating:
             self._rotating_floating = False
+            self._rotation_workspace_offset = QPointF(0, 0)
             self.status_changed.emit(f"已旋轉到 {self.floating_rotation:.1f}°")
             self.update()
             return
@@ -469,9 +582,22 @@ class CanvasWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self._drawing:
             self._drawing = False
             self._last_pos = None
-            self._finish_edit("已更新圖層")
+            blended_pixels = self._brush_blended_pixel_count()
+            self._clear_brush_stroke_state()
+            if self.tool == "pen" and self.pixel_blend_enabled:
+                status = (
+                    f"像素融色完成：實際融合 {blended_pixels} 個 pixel"
+                    if blended_pixels
+                    else "像素融色未命中鄰色：請靠近既有顏色繪製，或開啟透明淡邊"
+                )
+                self._finish_edit(status)
+            else:
+                self._finish_edit("已更新圖層")
 
     def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape and self.finish_active_selection():
+            event.accept()
+            return
         if event.key() not in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down):
             super().keyPressEvent(event)
             return
@@ -486,6 +612,7 @@ class CanvasWidget(QWidget):
     def move_selection_or_floating(self, dx: int, dy: int) -> bool:
         if self.floating_image is not None:
             self.floating_pos += QPointF(dx, dy)
+            self.ensure_floating_within_workspace()
             self.status_changed.emit(f"已移動浮動選取 {dx}, {dy}")
             self.update()
             return True
@@ -506,17 +633,59 @@ class CanvasWidget(QWidget):
         self.update()
         super().leaveEvent(event)
 
-    def _event_to_image_pos(self, event: QMouseEvent) -> Optional[QPoint]:
-        if not self.frame or not self._image_rect.contains(event.position()):
+    def _event_to_image_pos(self, event: QMouseEvent, allow_expansion: bool = False) -> Optional[QPoint]:
+        if not self.frame or self.zoom <= 0:
             return None
         x = int((event.position().x() - self._image_rect.left()) / self.zoom)
         y = int((event.position().y() - self._image_rect.top()) / self.zoom)
+        if allow_expansion and (x < 0 or y < 0 or x >= self.frame.width or y >= self.frame.height):
+            left = self._workspace_expansion_amount(-x) if x < 0 else 0
+            top = self._workspace_expansion_amount(-y) if y < 0 else 0
+            right = self._workspace_expansion_amount(x - self.frame.width + 1) if x >= self.frame.width else 0
+            bottom = self._workspace_expansion_amount(y - self.frame.height + 1) if y >= self.frame.height else 0
+            self.workspace_expansion_requested.emit(left, top, right, bottom)
+            x += left
+            y += top
         if x < 0 or y < 0 or x >= self.frame.width or y >= self.frame.height:
             return None
         return QPoint(x, y)
 
+    @staticmethod
+    def _workspace_expansion_amount(required: float) -> int:
+        padding = 64
+        chunk = 128
+        return math.ceil(max(padding, required + padding) / chunk) * chunk
+
+    def ensure_floating_within_workspace(self) -> None:
+        if self.frame is None or self.floating_image is None:
+            return
+        bounds = self._floating_transform().mapRect(
+            QRectF(0, 0, self.floating_image.width(), self.floating_image.height())
+        )
+        left = self._workspace_expansion_amount(-bounds.left()) if bounds.left() < 0 else 0
+        top = self._workspace_expansion_amount(-bounds.top()) if bounds.top() < 0 else 0
+        right = (
+            self._workspace_expansion_amount(bounds.right() - self.frame.width)
+            if bounds.right() > self.frame.width
+            else 0
+        )
+        bottom = (
+            self._workspace_expansion_amount(bounds.bottom() - self.frame.height)
+            if bounds.bottom() > self.frame.height
+            else 0
+        )
+        if any((left, top, right, bottom)):
+            self.workspace_expansion_requested.emit(left, top, right, bottom)
+
     def _draw_line(self, start: QPoint, end: QPoint) -> None:
         if not self.frame:
+            return
+        if (
+            self.tool == "pen"
+            and self.pixel_blend_enabled
+            and self.color.alpha() > 0
+        ):
+            self._draw_pixel_blend_line(start, end)
             return
         image = self.frame.active_layer.image
         painter = QPainter(image)
@@ -531,6 +700,273 @@ class CanvasWidget(QWidget):
         painter.end()
         self.frame.mark_dirty()
         self.update()
+
+    def _begin_brush_stroke(self) -> None:
+        self._clear_brush_stroke_state()
+        if (
+            not self.frame
+            or self.tool != "pen"
+            or not self.pixel_blend_enabled
+            or self.color.alpha() <= 0
+        ):
+            return
+        self._brush_base_layer_array = qimage_to_array(self.frame.active_layer.image)
+        if self.pixel_blend_sample_visible_layers:
+            self._brush_source_array = qimage_to_array(self.frame.composite())
+            self._brush_fallback_source_array = None
+        else:
+            self._brush_source_array = self._brush_base_layer_array
+            self._brush_fallback_source_array = (
+                qimage_to_array(self.frame.composite()) if len(self.frame.layers) > 1 else None
+            )
+        shape = (self.frame.height, self.frame.width)
+        self._brush_stroke_mask = np.zeros(shape, dtype=bool)
+        self._brush_edge_factor = np.zeros(shape, dtype=np.float32)
+        self._brush_blended_mask = np.zeros(shape, dtype=bool)
+
+    def _clear_brush_stroke_state(self) -> None:
+        self._brush_source_array = None
+        self._brush_fallback_source_array = None
+        self._brush_base_layer_array = None
+        self._brush_stroke_mask = None
+        self._brush_edge_factor = None
+        self._brush_blended_mask = None
+
+    def _brush_blended_pixel_count(self) -> int:
+        return (
+            int(np.count_nonzero(self._brush_blended_mask))
+            if self._brush_blended_mask is not None
+            else 0
+        )
+
+    def _expand_brush_stroke_state(self, dx: int, dy: int) -> None:
+        if self.frame is None or self._brush_source_array is None:
+            return
+        new_height = self.frame.height
+        new_width = self.frame.width
+
+        def expand_array(array: np.ndarray) -> np.ndarray:
+            shape = (new_height, new_width) + array.shape[2:]
+            expanded = np.zeros(shape, dtype=array.dtype)
+            old_height, old_width = array.shape[:2]
+            expanded[dy : dy + old_height, dx : dx + old_width] = array
+            return expanded
+
+        shared_layer_source = self._brush_source_array is self._brush_base_layer_array
+        self._brush_base_layer_array = expand_array(self._brush_base_layer_array)
+        self._brush_source_array = (
+            self._brush_base_layer_array
+            if shared_layer_source
+            else expand_array(self._brush_source_array)
+        )
+        if self._brush_fallback_source_array is not None:
+            self._brush_fallback_source_array = expand_array(self._brush_fallback_source_array)
+        self._brush_stroke_mask = expand_array(self._brush_stroke_mask)
+        self._brush_edge_factor = expand_array(self._brush_edge_factor)
+        self._brush_blended_mask = expand_array(self._brush_blended_mask)
+
+    @staticmethod
+    def _qimage_array_view(image: QImage) -> np.ndarray:
+        return np.ndarray(
+            shape=(image.height(), image.width(), 4),
+            dtype=np.uint8,
+            buffer=image.bits(),
+            strides=(image.bytesPerLine(), 4, 1),
+        )
+
+    def _draw_pixel_blend_line(self, start: QPoint, end: QPoint) -> None:
+        if not self.frame:
+            return
+        if self._brush_source_array is None:
+            self._begin_brush_stroke()
+        if (
+            self._brush_source_array is None
+            or self._brush_base_layer_array is None
+            or self._brush_stroke_mask is None
+            or self._brush_edge_factor is None
+            or self._brush_blended_mask is None
+        ):
+            return
+
+        width = self.frame.width
+        height = self.frame.height
+        radius = max(0.5, self.brush_size / 2.0)
+        margin = math.ceil(radius) + 1
+        x0 = max(0, min(start.x(), end.x()) - margin)
+        y0 = max(0, min(start.y(), end.y()) - margin)
+        x1 = min(width, max(start.x(), end.x()) + margin + 1)
+        y1 = min(height, max(start.y(), end.y()) + margin + 1)
+        if x0 >= x1 or y0 >= y1:
+            return
+
+        ys, xs = np.mgrid[y0:y1, x0:x1].astype(np.float32)
+        vx = float(end.x() - start.x())
+        vy = float(end.y() - start.y())
+        length_sq = vx * vx + vy * vy
+        if length_sq <= 0.0:
+            nearest_x = np.full_like(xs, float(start.x()))
+            nearest_y = np.full_like(ys, float(start.y()))
+        else:
+            projection = np.clip(
+                ((xs - start.x()) * vx + (ys - start.y()) * vy) / length_sq,
+                0.0,
+                1.0,
+            )
+            nearest_x = start.x() + projection * vx
+            nearest_y = start.y() + projection * vy
+        distance = np.sqrt((xs - nearest_x) ** 2 + (ys - nearest_y) ** 2)
+        segment_mask = distance <= radius
+        if not np.any(segment_mask):
+            return
+
+        if self.brush_size <= self.pixel_blend_edge_width * 2:
+            segment_factor = np.ones_like(distance, dtype=np.float32)
+        else:
+            core_radius = max(0.0, radius - float(self.pixel_blend_edge_width))
+            segment_factor = np.clip(
+                (distance - core_radius) / max(0.5, radius - core_radius),
+                0.0,
+                1.0,
+            ).astype(np.float32)
+
+        stroke_patch = self._brush_stroke_mask[y0:y1, x0:x1]
+        factor_patch = self._brush_edge_factor[y0:y1, x0:x1]
+        already_stroked = stroke_patch.copy()
+        stroke_patch |= segment_mask
+        factor_patch[segment_mask & ~already_stroked] = segment_factor[segment_mask & ~already_stroked]
+        factor_patch[segment_mask & already_stroked] = np.minimum(
+            factor_patch[segment_mask & already_stroked],
+            segment_factor[segment_mask & already_stroked],
+        )
+
+        target_rgba = np.empty((y1 - y0, x1 - x0, 4), dtype=np.float32)
+        brush_rgba = np.array(qcolor_to_rgba(self.color), dtype=np.float32)
+        target_rgba[:, :, :] = brush_rgba
+        strength = max(0.0, min(1.0, float(self.pixel_blend_strength)))
+        blend_amount = np.clip(factor_patch * strength, 0.0, 1.0)
+        nearby_rgb, has_visible_color, transparent_fraction = self._pixel_blend_neighbor_patch(
+            x0,
+            y0,
+            x1,
+            y1,
+        )
+        effective_blend = np.where(has_visible_color, blend_amount, 0.0)
+        target_rgba[:, :, :3] = (
+            brush_rgba[:3] * (1.0 - effective_blend[:, :, None])
+            + nearby_rgb * effective_blend[:, :, None]
+        )
+        if self.pixel_blend_include_transparent:
+            target_rgba[:, :, 3] = brush_rgba[3] * (
+                1.0 - blend_amount * transparent_fraction
+            )
+        affected = stroke_patch
+        changed_from_solid_brush = (
+            np.max(np.abs(target_rgba[:, :, :3] - brush_rgba[:3]), axis=2) >= 0.5
+        ) | (np.abs(target_rgba[:, :, 3] - brush_rgba[3]) >= 0.5)
+        blended_patch = self._brush_blended_mask[y0:y1, x0:x1]
+        blended_patch[affected] = changed_from_solid_brush[affected]
+
+        base = self._brush_base_layer_array[y0:y1, x0:x1][affected].astype(np.float32)
+        source = target_rgba[affected]
+        source_alpha = source[:, 3:4] / 255.0
+        base_alpha = base[:, 3:4] / 255.0
+        output_alpha = source_alpha + base_alpha * (1.0 - source_alpha)
+        premultiplied_rgb = (
+            source[:, :3] * source_alpha
+            + base[:, :3] * base_alpha * (1.0 - source_alpha)
+        )
+        output_rgb = np.divide(
+            premultiplied_rgb,
+            output_alpha,
+            out=np.zeros_like(premultiplied_rgb),
+            where=output_alpha > 0.0,
+        )
+        output = np.concatenate((output_rgb, output_alpha * 255.0), axis=1)
+
+        image_array = self._qimage_array_view(self.frame.active_layer.image)
+        image_patch = image_array[y0:y1, x0:x1]
+        image_patch[affected] = np.clip(np.rint(output), 0, 255).astype(np.uint8)
+        self.frame.mark_dirty()
+        self.update()
+
+    def _pixel_blend_neighbor_patch(
+        self,
+        x0: int,
+        y0: int,
+        x1: int,
+        y1: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if self._brush_source_array is None or self._brush_stroke_mask is None:
+            shape = (max(0, y1 - y0), max(0, x1 - x0))
+            return (
+                np.zeros(shape + (3,), dtype=np.float32),
+                np.zeros(shape, dtype=bool),
+                np.zeros(shape, dtype=np.float32),
+            )
+        radius = max(1, int(self.pixel_blend_sample_radius))
+        height, width = self._brush_stroke_mask.shape
+        sample_x0 = max(0, x0 - radius)
+        sample_y0 = max(0, y0 - radius)
+        sample_x1 = min(width, x1 + radius)
+        sample_y1 = min(height, y1 + radius)
+        available = (~self._brush_stroke_mask[sample_y0:sample_y1, sample_x0:sample_x1]).astype(
+            np.float32
+        )
+        kernel = radius * 2 + 1
+        sigma = max(0.5, radius / 2.0)
+
+        def blur(values: np.ndarray) -> np.ndarray:
+            return cv2.GaussianBlur(
+                values.astype(np.float32),
+                (kernel, kernel),
+                sigmaX=sigma,
+                sigmaY=sigma,
+                borderType=cv2.BORDER_CONSTANT,
+            )
+
+        def sample_source(source_array: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            source = source_array[sample_y0:sample_y1, sample_x0:sample_x1]
+            alpha = source[:, :, 3].astype(np.float32) / 255.0
+            visible_weight = alpha * available
+            visible_sum = blur(visible_weight)
+            weighted_rgb = blur(source[:, :, :3].astype(np.float32) * visible_weight[:, :, None])
+            nearby_rgb = np.divide(
+                weighted_rgb,
+                visible_sum[:, :, None],
+                out=np.zeros_like(weighted_rgb),
+                where=visible_sum[:, :, None] > 1e-6,
+            )
+            available_sum = blur(available)
+            transparent_sum = blur((alpha <= 0.0).astype(np.float32) * available)
+            transparent_fraction = np.divide(
+                transparent_sum,
+                available_sum,
+                out=np.zeros_like(transparent_sum),
+                where=available_sum > 1e-6,
+            )
+            return nearby_rgb, visible_sum > 1e-6, transparent_fraction
+
+        nearby_rgb, has_visible_color, transparent_fraction = sample_source(
+            self._brush_source_array
+        )
+        if self._brush_fallback_source_array is not None:
+            fallback_rgb, fallback_visible, fallback_transparent = sample_source(
+                self._brush_fallback_source_array
+            )
+            use_fallback = ~has_visible_color & fallback_visible
+            nearby_rgb[use_fallback] = fallback_rgb[use_fallback]
+            transparent_fraction[use_fallback] = fallback_transparent[use_fallback]
+            has_visible_color |= fallback_visible
+
+        crop_y0 = y0 - sample_y0
+        crop_x0 = x0 - sample_x0
+        crop_y1 = crop_y0 + (y1 - y0)
+        crop_x1 = crop_x0 + (x1 - x0)
+        return (
+            nearby_rgb[crop_y0:crop_y1, crop_x0:crop_x1],
+            has_visible_color[crop_y0:crop_y1, crop_x0:crop_x1],
+            transparent_fraction[crop_y0:crop_y1, crop_x0:crop_x1],
+        )
 
     def _fill_lasso_selection(self, image: QImage) -> None:
         painter = QPainter(image)
@@ -608,6 +1044,7 @@ class CanvasWidget(QWidget):
         if self.floating_image is None:
             return
         self.floating_rotation = (self.floating_rotation + degrees) % 360
+        self.ensure_floating_within_workspace()
         self.status_changed.emit(f"浮動選取角度：{round(self.floating_rotation)}°")
         self.update()
 
@@ -616,6 +1053,7 @@ class CanvasWidget(QWidget):
             self.status_changed.emit("沒有浮動選取可旋轉")
             return
         self.floating_rotation = degrees % 360
+        self.ensure_floating_within_workspace()
         self.status_changed.emit(f"浮動選取角度：{self.floating_rotation:.1f}°")
         self.update()
 
@@ -628,15 +1066,25 @@ class CanvasWidget(QWidget):
         else:
             self.floating_flip_y = not self.floating_flip_y
             self.status_changed.emit("已垂直翻轉浮動選取")
+        self.ensure_floating_within_workspace()
         self.update()
 
     def commit_floating_selection(self) -> bool:
         if not self.frame or self.floating_image is None:
             return False
+        self.ensure_floating_within_workspace()
         transform = self._floating_transform()
         floating_images = self.batch_floating_images or [(self.frame, self.floating_image)]
         for frame, image in floating_images:
             painter = QPainter(frame.active_layer.image)
+            painter.setRenderHint(
+                QPainter.RenderHint.SmoothPixmapTransform,
+                self.smooth_selection_transform,
+            )
+            painter.setRenderHint(
+                QPainter.RenderHint.Antialiasing,
+                self.smooth_selection_transform,
+            )
             painter.setTransform(transform)
             painter.drawImage(0, 0, image)
             painter.end()
@@ -644,6 +1092,27 @@ class CanvasWidget(QWidget):
         self.floating_image = None
         self.batch_floating_images = []
         self.image_changed.emit()
+        self.update()
+        return True
+
+    def finish_active_selection(self) -> bool:
+        had_selection = (
+            self.floating_image is not None
+            or self.has_active_selection()
+            or self._selecting
+        )
+        if not had_selection:
+            return False
+        committed = self.commit_floating_selection()
+        self._selecting = False
+        self._selection_start = None
+        self._dragging_floating = False
+        self._resizing_floating = False
+        self._rotating_floating = False
+        self._resize_handle = ""
+        self.selection_rect = None
+        self.lasso_points = []
+        self.status_changed.emit("已完成選取並退出" if committed else "已取消選取")
         self.update()
         return True
 
@@ -745,6 +1214,14 @@ class CanvasWidget(QWidget):
         if self.floating_image is None:
             return
         painter.save()
+        painter.setRenderHint(
+            QPainter.RenderHint.SmoothPixmapTransform,
+            self.smooth_selection_transform,
+        )
+        painter.setRenderHint(
+            QPainter.RenderHint.Antialiasing,
+            self.smooth_selection_transform,
+        )
         view_transform = QTransform()
         view_transform.translate(self._image_rect.left(), self._image_rect.top())
         view_transform.scale(self.zoom, self.zoom)
@@ -770,6 +1247,11 @@ class CanvasWidget(QWidget):
         painter.drawEllipse(center, radius, radius)
         painter.setPen(QPen(QColor(0, 0, 0), 1, Qt.PenStyle.DashLine))
         painter.drawEllipse(center, radius, radius)
+        if self.tool == "pen" and self.pixel_blend_enabled:
+            core_radius = (self.brush_size / 2.0 - self.pixel_blend_edge_width) * self.zoom
+            if core_radius > 0.5:
+                painter.setPen(QPen(QColor(0, 220, 255), 1, Qt.PenStyle.DashLine))
+                painter.drawEllipse(center, core_radius, core_radius)
         painter.restore()
 
     def _selection_to_image(self, frame: Optional[Frame] = None, bounds: Optional[QRect] = None) -> Optional[QImage]:

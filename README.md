@@ -8,15 +8,64 @@ SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor bu
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.2.4-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.3.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.2.4.exe
+SpriteMakerPySide-2.3.0.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 2.3.0
+
+- Replaces per-timestamp random seeking with one seek followed by sequential decoding, preserving monotonic source-frame order and more reliable actual timestamps.
+- Adds **Exact Time**, **Balanced**, and **Sharpness First** extraction strategies. **Balanced** is the default.
+- Balanced and Sharpness First evaluate nearby decoded frames using Laplacian sharpness, target-time distance, source-frame spacing, and scene-histogram similarity.
+- Candidate frames are kept in a small rolling buffer and released as targets are finalized, avoiding full-range uncompressed video storage.
+- Extracted frames record target time, actual source time, time offset, source index, sharpness score, and clarity percentile.
+- Low-clarity frames remain selectable but receive a visible red badge, detailed tooltip, and summary count on the frame selection page.
+- No automatic sharpening or generated detail is applied to the extracted images.
+
+## What's New In 2.2.9
+
+- Fixes Spritesheet edge trimming so `1 px` removes exactly one alpha-mask contour layer.
+- Replaces the square 3x3 erosion kernel with four-connected erosion. This prevents 45-degree edges, hair strands, and sloped clothing contours from losing two staircase levels in one trim step.
+- Each additional trim value removes one further layer predictably, and preview/export use the same corrected pipeline.
+
+## What's New In 2.2.8
+
+- Fixes selection rotation jitter by freezing the rotation center, start vector, and starting angle for the entire pointer drag.
+- Rotation angle changes are calculated directly from the frozen start vector, preventing intermediate previews from feeding rounding error into later pointer movements.
+- Compensates for workspace coordinate shifts while rotating beyond the current image boundary.
+- Smooth preview and final commit continue to resample from the original floating selection with the same transform quality, preventing repeated rasterization damage.
+
+## What's New In 2.2.7
+
+- Fixes selection resize jitter and tearing by calculating the entire drag from the transform captured when the resize handle is first pressed, instead of feeding each updated scale back into the next mouse move.
+- `Shift` proportional resize now uses one stable radial ratio for both axes.
+- Adds **Transform Quality** with **Smooth** as the default for interpolated scaling/rotation and **Pixel Sharp** for nearest-neighbor pixel-art transforms. Preview and final commit always use the same quality.
+- Pressing `Delete` while the editor frame timeline has focus removes every selected frame, including an inclusive `Shift` range, as one undoable operation.
+- Delete remains context-sensitive: canvas focus deletes selected pixels, while timeline focus deletes selected frames.
+
+## What's New In 2.2.6
+
+- Adds an optional **Pixel Blend Pen** mode that keeps the stroke core at the current pen color while blending edge pixels with nearby colors from the pre-stroke image.
+- Blend strength, edge width, sample radius, sampling source, and transparent-edge behavior are independently configurable.
+- Sampling can use the active layer or the composite of all visible layers. Transparent pixels are ignored by default, with an optional **Fade To Transparent** mode for semi-transparent stroke edges.
+- The stronger defaults are 75% strength, a 2 px edge, a 5 px sample radius, and all-visible-layer sampling. If active-layer sampling finds no usable color, it automatically falls back to the visible composite.
+- A cyan inner ring in the cursor preview shows the solid-color core when edge blending is enabled.
+- Pixel blending uses local NumPy/OpenCV processing and a stable pre-stroke snapshot to prevent repeated self-sampling and keep large-brush drawing responsive.
+- After every stroke, the status bar reports how many pixels actually changed through blending, or explains that no neighboring color was found.
+
+## What's New In 2.2.5
+
+- Separates the editable workspace from the black output guide. The black rectangle now only previews the PNG/ZIP/spritesheet crop and never blocks editing.
+- Pen, eraser, fill, rectangular/lasso selection, pasted content, and floating-selection transforms can work beyond the imported image boundary.
+- Crossing a workspace edge automatically adds transparent workspace in chunked increments while keeping every frame aligned.
+- Workspace expansion keeps the output guide and artwork visually anchored. Pixels outside the guide remain editable and in undo/redo history, but are excluded from export until the output size is enlarged.
+- Rectangular and lasso selections can now be finished with `Esc` or by clicking a pixel outside the selection. Any floating transform is committed before the selection is dismissed.
 
 ## What's New In 2.2.4
 
@@ -106,6 +155,7 @@ Frames can be reordered by dragging thumbnails in the frame timeline. Reordering
 Use the timeline's multi-frame controls as follows:
 
 - Click one frame, then `Shift`-click another to select the inclusive continuous range.
+- With the frame timeline focused, press `Delete` to remove every selected frame in one operation; one undo restores the complete range.
 - Drag any selected thumbnail to move the whole selected range while preserving its internal order.
 - Enable **All-Frame Selection Box** before drawing a rectangular or lasso selection. One selected thumbnail targets all frames; two or more selected thumbnails target only that selected range.
 - Move, resize, rotate, flip, or delete the selected content to apply the same transform to every target frame. One undo restores the complete synchronized operation.
@@ -131,7 +181,9 @@ Drawing, fill, erase, selection deletion, and color erase operations affect the 
 - `Ctrl+wheel`: zoom the main canvas.
 - `Ctrl+0`: reset canvas zoom to 100%.
 - Use scrollbars to reach areas outside the current viewport.
-- The black rectangle shows the current global output canvas size.
+- The black rectangle is only a guide for the current global export crop; it does not limit editing.
+- Drawing or moving content beyond the imported image boundary automatically expands the transparent workspace.
+- Pixels outside the black guide remain in frame/layer data and undo/redo history. They are exported only after **Output W/H** is enlarged enough to include them.
 - Edit **Output W** and **Output H** to change the global output size.
 - Use **Current Size** to match the output size to the current frame.
 - Toggle **Center Lines** to show horizontal/vertical center guides.
@@ -147,6 +199,18 @@ Drawing, fill, erase, selection deletion, and color erase operations affect the 
 - **Brush**: controls pen and eraser size.
 - **Tolerance**: controls fill, magic wand, single-frame color erase, and global color erase tolerance.
 - `Alt+click` on the canvas: sample the visible pixel color into the toolbar color.
+
+### Pixel Blend Pen
+
+Enable **Pixel Blend** to blend only the outer pixels of pen strokes with nearby colors:
+
+- **Strength** (`0-100%`): how strongly edge pixels move toward sampled neighboring colors.
+- **Edge** (`1-8 px`): width of the blended outer stroke band.
+- **Sample** (`1-16 px`): nearby color sampling radius.
+- **Active Layer / All Visible Layers**: choose whether sampling reads only the active layer or the visible composite. All visible layers is the default; active-layer mode automatically falls back to the visible composite only where the active layer has no usable neighboring color.
+- **Fade To Transparent**: allow transparent neighboring pixels to reduce edge alpha. It is disabled by default, so transparent pixels do not change stroke alpha.
+
+The defaults are 75% strength, a 2 px edge, and a 5 px sample radius. The stroke core always uses the current pen color. Each mouse-down starts from a stable image snapshot, so a stroke never repeatedly samples its own newly painted pixels. After mouse release, the status bar reports the number of pixels that actually differed from a normal solid pen stroke. This mode affects only the pen; eraser, fill, and edge-spill cleanup behavior are unchanged.
 
 ### Tools
 
@@ -209,9 +273,11 @@ Selections support:
 - Rotate floating content with the on-canvas yellow handle
 - Resize floating content with corner handles
 - Hold `Shift` while resizing to preserve proportions
+- Choose **Smooth** transform quality to reduce tearing during scaling/rotation, or **Pixel Sharp** to preserve nearest-neighbor pixel edges
 - Rotate floating content 90 degrees with `R`
 - Flip floating content horizontally with `H`
 - Flip floating content vertically with `Shift+H`
+- Press `Esc` or click a pixel outside the selection to finish the transform and deselect
 
 Pasted content appears at the same coordinate where it was copied, even when pasted into another frame.
 
@@ -228,7 +294,8 @@ The video importer supports choosing or dragging a video file.
 - Use **Play/Pause** to control preview playback.
 - Use `Ctrl+wheel` over the preview to zoom.
 - Target FPS defaults to `12 FPS`.
-- Click **Extract frame** to sample frames from the selected time range.
+- Choose an extraction strategy: **Exact Time**, **Balanced** (default), or **Sharpness First**.
+- Click **Extract frame** to sequentially decode and select frames from the chosen time range.
 
 ### Frame Selection Page
 
@@ -237,6 +304,8 @@ After extraction, the app opens a clean frame selection page:
 - Left top: animation preview of checked frames.
 - Right top: single-frame preview.
 - Bottom: extracted frame thumbnail list. Unchecked frames display a semi-transparent gray thumbnail overlay.
+- Low-clarity results show a red badge but remain checked and selectable.
+- Hover a thumbnail to inspect target time, actual source time, offset, source index, sharpness, and clarity percentile.
 - Splitters let you resize the preview and frame list areas.
 - `Ctrl+wheel` on the preview or frame list changes zoom/thumbnail size.
 - Check or uncheck frames to decide what to keep.
@@ -308,12 +377,13 @@ Options:
 | `Ctrl+C` | Copy selection |
 | `Ctrl+X` | Cut selection |
 | `Ctrl+V` | Paste selection |
-| `Delete` | Delete selected pixels or delete frame if no selection exists |
+| `Delete` | Delete selected pixels when the canvas has focus; delete all selected frames when the frame timeline has focus |
 | `R` | Rotate floating selection 90 degrees |
 | `H` | Flip floating selection horizontally |
 | `Shift+H` | Flip floating selection vertically |
 | Arrow keys | Move selection/floating selection |
 | `Shift+Arrow keys` | Move selection/floating selection by 10 pixels |
+| `Esc` | Finish the current rectangular/lasso selection and deselect |
 | `Alt+click` | Sample visible pixel color |
 
 ## Run From Source

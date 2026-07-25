@@ -10,6 +10,7 @@ from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent, QIcon, QImage, QM
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
@@ -306,21 +307,33 @@ class VideoExtractSignals(QObject):
 
 
 class VideoExtractWorker(QRunnable):
-    def __init__(self, path: Path, start: float, end: float, target_fps: float) -> None:
+    def __init__(
+        self,
+        path: Path,
+        start: float,
+        end: float,
+        target_fps: float,
+        extraction_mode: str,
+    ) -> None:
         super().__init__()
         self.path = path
         self.start = start
         self.end = end
         self.target_fps = target_fps
+        self.extraction_mode = extraction_mode
         self.signals = VideoExtractSignals()
 
     @Slot()
     def run(self) -> None:
         try:
-            frames = extract_video_frames(self.path, self.start, self.end, self.target_fps)
-            total = max(1, len(frames))
-            for index in range(total):
-                self.signals.progress.emit(index + 1, total)
+            frames = extract_video_frames(
+                self.path,
+                self.start,
+                self.end,
+                self.target_fps,
+                mode=self.extraction_mode,
+                progress_callback=self.signals.progress.emit,
+            )
             self.signals.finished.emit(frames)
         except Exception as exc:
             self.signals.failed.emit(str(exc))
@@ -464,6 +477,7 @@ class VideoImportDialog(QDialog):
         self.stop_frame_animation()
         self.frames = []
         self.import_images = []
+        self.quality_summary.clear()
         self.frame_list.clear()
         self.frame_preview.setText("尚未擷取 frame")
         self.animation_preview.setText("已勾選 frame 的動畫預覽")
@@ -519,6 +533,17 @@ class VideoImportDialog(QDialog):
         self.fps_spin.setValue(12.0)
         self.fps_spin.setSuffix(" FPS")
 
+        self.extraction_mode_combo = QComboBox()
+        self.extraction_mode_combo.addItem("精確時間", "exact")
+        self.extraction_mode_combo.addItem("平衡（推薦）", "balanced")
+        self.extraction_mode_combo.addItem("清晰優先", "sharp")
+        self.extraction_mode_combo.setCurrentIndex(1)
+        self.extraction_mode_combo.setToolTip(
+            "精確時間：取最接近目標時間的來源影格\n"
+            "平衡：在鄰近影格中兼顧時間與清晰度\n"
+            "清晰優先：允許較大時間偏移以避開模糊影格"
+        )
+
         self.thumb_size = QSpinBox()
         self.thumb_size.setRange(48, 240)
         self.thumb_size.setValue(96)
@@ -533,6 +558,7 @@ class VideoImportDialog(QDialog):
         settings.addRow("結束時間", self.end_spin)
         settings.addRow("目標 FPS", self.fps_spin)
         settings.addRow("下一頁縮圖大小", self.thumb_size)
+        settings.addRow("擷取策略", self.extraction_mode_combo)
         settings.addRow("", extract_button)
 
         path_row = QHBoxLayout()
@@ -555,11 +581,14 @@ class VideoImportDialog(QDialog):
         page = QWidget()
         title = QLabel("選擇要保留的 frame")
         title.setStyleSheet("font-size: 18px; font-weight: 700;")
+        self.quality_summary = QLabel("")
+        self.quality_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         back_button = QPushButton("返回影片設定")
         back_button.clicked.connect(self.show_video_page)
 
         header = QHBoxLayout()
         header.addWidget(title)
+        header.addWidget(self.quality_summary)
         header.addStretch(1)
         header.addWidget(back_button)
 
@@ -885,7 +914,13 @@ class VideoImportDialog(QDialog):
         self.animation_preview.setText("已勾選 frame 的動畫預覽")
         self.animation_info.setText("尚未播放")
         self.progress.setRange(0, 0)
-        self.worker = VideoExtractWorker(self.video_path, start, end, self.fps_spin.value())
+        self.worker = VideoExtractWorker(
+            self.video_path,
+            start,
+            end,
+            self.fps_spin.value(),
+            str(self.extraction_mode_combo.currentData() or "balanced"),
+        )
         self.worker.signals.progress.connect(self.on_extract_progress)
         self.worker.signals.finished.connect(self.on_extract_finished)
         self.worker.signals.failed.connect(self.on_extract_failed)
@@ -897,6 +932,8 @@ class VideoImportDialog(QDialog):
 
     def on_extract_finished(self, frames: list) -> None:
         self.frames = list(frames)
+        blurry_count = sum(1 for frame in self.frames if frame.is_blurry)
+        self.quality_summary.setText(f"共 {len(self.frames)} frame｜低清晰度 {blurry_count}")
         self.progress.setRange(0, max(1, len(self.frames)))
         self.progress.setValue(len(self.frames))
         self.refresh_frame_list()
@@ -927,17 +964,30 @@ class VideoImportDialog(QDialog):
             item = QListWidgetItem(QIcon(pixmap), str(index + 1))
             item.setData(Qt.ItemDataRole.UserRole, index)
             item.setData(FRAME_THUMBNAIL_ROLE, pixmap)
+            item.setToolTip(self.frame_quality_tooltip(index, frame))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(checked.get(index, Qt.CheckState.Checked))
             self.frame_list.addItem(item)
             self.update_frame_item_visual(item)
+
+    @staticmethod
+    def frame_quality_tooltip(index: int, frame: ExtractedVideoFrame) -> str:
+        quality = "低清晰度" if frame.is_blurry else "清晰度正常"
+        return (
+            f"Frame {index + 1}\n"
+            f"目標時間：{frame.target_timestamp:.3f}s\n"
+            f"來源時間：{frame.timestamp:.3f}s（偏移 {frame.time_offset * 1000:+.1f} ms）\n"
+            f"來源影格：#{frame.source_index}\n"
+            f"清晰度：{frame.sharpness:.1f}（百分位 {frame.clarity_percentile:.0f}%）\n"
+            f"判定：{quality}"
+        )
 
     def update_frame_preview(self, row: int) -> None:
         if row < 0 or row >= len(self.frames):
             return
         frame = self.frames[row]
         self.frame_preview.setImage(frame.image)
-        self.frame_preview.setToolTip(f"Frame {row + 1} / {frame.timestamp:.3f}s / source #{frame.source_index}")
+        self.frame_preview.setToolTip(self.frame_quality_tooltip(row, frame))
 
     def on_frame_check_changed(self, *args) -> None:
         if args and isinstance(args[0], QListWidgetItem):
@@ -960,6 +1010,24 @@ class VideoImportDialog(QDialog):
         if not isinstance(source, QPixmap) or source.isNull():
             return
         display = QPixmap(source)
+        index = item.data(Qt.ItemDataRole.UserRole)
+        if index is not None and 0 <= int(index) < len(self.frames) and self.frames[int(index)].is_blurry:
+            painter = QPainter(display)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            badge_label = "!" if display.width() < 64 else "低清晰"
+            preferred_width = 24 if badge_label == "!" else 68
+            badge = QRectF(
+                4,
+                4,
+                min(preferred_width, max(1, display.width() - 8)),
+                min(20, max(1, display.height() - 8)),
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(190, 35, 45, 225))
+            painter.drawRoundedRect(badge, 3, 3)
+            painter.setPen(QColor("white"))
+            painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, badge_label)
+            painter.end()
         if item.checkState() != Qt.CheckState.Checked:
             painter = QPainter(display)
             painter.fillRect(display.rect(), QColor(70, 70, 70, 155))
@@ -1030,6 +1098,8 @@ class VideoImportDialog(QDialog):
         self.animation_info.setText(
             f"{self.animation_index + 1}/{len(selected)}  "
             f"time={frame.timestamp:.3f}s  source=#{frame.source_index}  "
+            f"sharpness={frame.sharpness:.1f}"
+            f"{'  LOW' if frame.is_blurry else ''}  "
             f"speed={self.animation_fps_spin.value():.2f} FPS"
         )
 

@@ -623,21 +623,10 @@ def trim_alpha_edges(image: QImage, pixels: int = 1) -> QImage:
 
     for _ in range(pixels):
         keep = alpha.copy()
-        for dy in (-1, 0, 1):
-            for dx in (-1, 0, 1):
-                if dx == 0 and dy == 0:
-                    continue
-                shifted = np.zeros_like(alpha)
-                src_y0 = max(0, -dy)
-                src_y1 = alpha.shape[0] - max(0, dy)
-                src_x0 = max(0, -dx)
-                src_x1 = alpha.shape[1] - max(0, dx)
-                dst_y0 = max(0, dy)
-                dst_y1 = alpha.shape[0] - max(0, -dy)
-                dst_x0 = max(0, dx)
-                dst_x1 = alpha.shape[1] - max(0, -dx)
-                shifted[dst_y0:dst_y1, dst_x0:dst_x1] = alpha[src_y0:src_y1, src_x0:src_x1]
-                keep &= shifted
+        # A square 3x3 kernel removes two staircase levels from 45-degree
+        # contours. Four-connected erosion removes exactly one pixel layer.
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            keep &= shift_mask(alpha, dx, dy)
         alpha = keep
 
     arr[original_alpha & ~alpha, 3] = 0
