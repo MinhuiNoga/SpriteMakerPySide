@@ -8,15 +8,26 @@ SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor bu
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.3.1-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.3.3-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.3.1.exe
+SpriteMakerPySide-2.3.3.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 2.3.3
+
+- Renames **All-Frame Selection Box** to **Range Selection Box**.
+- Range Selection Box now applies synchronized movement, scaling, rotation, flipping, and deletion strictly to the frames currently selected in the frame timeline.
+- Selecting one thumbnail affects only that frame. `Shift`-selecting a continuous range or `Ctrl`-selecting separate thumbnails affects exactly those selected frames.
+
+## What's New In 2.3.2
+
+- Updates the default Spritesheet trimming setup to remove `1 px`, enable edge-trim antialiasing, and use `2.00 px` contour smoothing.
+- Keeps the outline disabled by default while setting its ready-to-use width to `1 px`.
 
 ## What's New In 2.3.1
 
@@ -81,7 +92,7 @@ The release package includes Python, PySide6, OpenCV, and required runtime files
 
 ## What's New In 2.2.4
 
-- Adds **All-Frame Selection Box** to synchronize selection movement, scaling, free rotation, flipping, and deletion across frames. With one timeline thumbnail selected it targets every frame; with a multi-frame selection it targets only those frames.
+- Introduced synchronized multi-frame selection transforms under the former **All-Frame Selection Box** name. Version 2.3.3 renames it **Range Selection Box** and limits it strictly to selected timeline frames.
 - Adds inclusive `Shift` range selection to the editor frame timeline. Click one frame, then `Shift`-click another to select both endpoints and every frame between them.
 - Selected frame ranges can be dragged as one ordered block, and opening Animation Preview uses the selected range as its initial playback start/end interval.
 - Synchronized frame edits are stored as one project-wide undo/redo operation.
@@ -169,7 +180,7 @@ Use the timeline's multi-frame controls as follows:
 - Click one frame, then `Shift`-click another to select the inclusive continuous range.
 - With the frame timeline focused, press `Delete` to remove every selected frame in one operation; one undo restores the complete range.
 - Drag any selected thumbnail to move the whole selected range while preserving its internal order.
-- Enable **All-Frame Selection Box** before drawing a rectangular or lasso selection. One selected thumbnail targets all frames; two or more selected thumbnails target only that selected range.
+- Enable **Range Selection Box** before drawing a rectangular or lasso selection. The synchronized operation targets only the thumbnails currently selected in the frame timeline.
 - Move, resize, rotate, flip, or delete the selected content to apply the same transform to every target frame. One undo restores the complete synchronized operation.
 - Opening Animation Preview with a selected range sets that range as the initial playback interval.
 

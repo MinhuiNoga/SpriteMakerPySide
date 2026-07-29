@@ -162,6 +162,7 @@ class CanvasWidget(QWidget):
         self.lasso_points: List[QPoint] = []
         self.clipboard_image: Optional[QImage] = None
         self.floating_image: Optional[QImage] = None
+        self.batch_selection_active = False
         self.batch_selection_frames: List[Frame] = []
         self.batch_floating_images: List[tuple[Frame, QImage]] = []
         self.floating_pos = QPointF(0, 0)
@@ -206,7 +207,7 @@ class CanvasWidget(QWidget):
         self.updateGeometry()
         self.update()
 
-    def set_batch_selection_frames(self, frames: List[Frame]) -> None:
+    def set_batch_selection_frames(self, frames: List[Frame], active: bool = False) -> None:
         unique_frames: List[Frame] = []
         seen = set()
         for frame in frames:
@@ -214,15 +215,15 @@ class CanvasWidget(QWidget):
             if identity not in seen:
                 seen.add(identity)
                 unique_frames.append(frame)
+        self.batch_selection_active = active
         self.batch_selection_frames = unique_frames
 
     def selection_target_frames(self) -> List[Frame]:
         if not self.frame:
             return []
-        targets = list(self.batch_selection_frames)
-        if not any(frame is self.frame for frame in targets):
-            targets.insert(0, self.frame)
-        return targets
+        if self.batch_selection_active:
+            return list(self.batch_selection_frames)
+        return [self.frame]
 
     def shift_workspace_coordinates(self, dx: int, dy: int) -> None:
         if self.selection_rect is not None:

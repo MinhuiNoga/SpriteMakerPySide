@@ -461,10 +461,10 @@ class MainWindow(QMainWindow):
             btn = QPushButton(label)
             btn.clicked.connect(slot)
             frame_row.addWidget(btn)
-        self.sync_selection_toggle = QCheckBox("全 Frame 選取框")
+        self.sync_selection_toggle = QCheckBox("範圍選取框")
         self.sync_selection_toggle.setToolTip(
             "開啟後，選取框的移動、縮放、旋轉、翻轉與刪除會同步套用；"
-            "影格列只選一幀時套用全部 frame，多選時只套用選取區間"
+            "作用範圍只包含影格列目前選取的 frame"
         )
         self.sync_selection_toggle.toggled.connect(self.toggle_synchronized_selection)
         frame_row.addWidget(self.sync_selection_toggle)
@@ -473,7 +473,7 @@ class MainWindow(QMainWindow):
         selection_hint = QLabel("Shift + 點擊兩個 frame：選取包含端點的連續區間；拖曳可整組重新排序")
         selection_hint.setStyleSheet("color:#555;")
         frame_layout.addWidget(selection_hint)
-        self.sync_selection_status = QLabel("同步選取框：關閉")
+        self.sync_selection_status = QLabel("範圍選取框：關閉")
         frame_layout.addWidget(self.sync_selection_status)
         frame_layout.addWidget(self.thumbnails)
         self.frame_dock.setWidget(frame_panel)
@@ -889,25 +889,26 @@ class MainWindow(QMainWindow):
         if enabled:
             self.set_tool("select")
         self.update_synchronized_selection_targets()
-        self.status.showMessage("已開啟全 Frame 選取框" if enabled else "已關閉全 Frame 選取框")
+        self.status.showMessage("已開啟範圍選取框" if enabled else "已關閉範圍選取框")
 
     def update_synchronized_selection_targets(self) -> None:
         if not hasattr(self, "sync_selection_toggle"):
             return
         selected_rows = self.selected_frame_rows()
         if not self.sync_selection_toggle.isChecked() or not self.frames:
-            self.canvas.set_batch_selection_frames([])
-            self.sync_selection_status.setText("同步選取框：關閉")
+            self.canvas.set_batch_selection_frames([], active=False)
+            self.sync_selection_status.setText("範圍選取框：關閉")
             return
+        targets = [self.frames[row] for row in selected_rows]
         if len(selected_rows) > 1:
-            targets = [self.frames[row] for row in selected_rows]
             self.sync_selection_status.setText(
-                f"同步選取框：已選 {len(targets)} 幀（{selected_rows[0] + 1} - {selected_rows[-1] + 1}）"
+                f"範圍選取框：已選 {len(targets)} 幀（{selected_rows[0] + 1} - {selected_rows[-1] + 1}）"
             )
+        elif selected_rows:
+            self.sync_selection_status.setText(f"範圍選取框：第 {selected_rows[0] + 1} 幀")
         else:
-            targets = list(self.frames)
-            self.sync_selection_status.setText(f"同步選取框：全部 {len(targets)} 幀")
-        self.canvas.set_batch_selection_frames(targets)
+            self.sync_selection_status.setText("範圍選取框：尚未選取 frame")
+        self.canvas.set_batch_selection_frames(targets, active=True)
 
     def reorder_frames(self, rows: object, drop_row: int) -> None:
         valid_rows = sorted({int(row) for row in rows if 0 <= int(row) < len(self.frames)}) if isinstance(rows, (list, tuple, set)) else []
@@ -1906,7 +1907,7 @@ class SpritesheetPreviewDialog(QDialog):
 
         self.trim_pixels = QSpinBox()
         self.trim_pixels.setRange(0, 64)
-        self.trim_pixels.setValue(0)
+        self.trim_pixels.setValue(1)
         self.trim_pixels.setToolTip("將角色輪廓向內收縮指定的 pixel 距離")
         self.trim_pixels.valueChanged.connect(self.queue_update)
 
@@ -1919,7 +1920,7 @@ class SpritesheetPreviewDialog(QDialog):
         self.trim_contour_smoothing.setRange(0.0, 2.0)
         self.trim_contour_smoothing.setSingleStep(0.25)
         self.trim_contour_smoothing.setDecimals(2)
-        self.trim_contour_smoothing.setValue(1.0)
+        self.trim_contour_smoothing.setValue(2.0)
         self.trim_contour_smoothing.setSuffix(" px")
         self.trim_contour_smoothing.setToolTip("輪廓擬合的最大偏差；越高越平滑，尖角仍會保留")
         self.trim_contour_smoothing.valueChanged.connect(self.queue_update)
@@ -1929,7 +1930,7 @@ class SpritesheetPreviewDialog(QDialog):
 
         self.outline_pixels = QSpinBox()
         self.outline_pixels.setRange(0, 64)
-        self.outline_pixels.setValue(0)
+        self.outline_pixels.setValue(1)
         self.outline_pixels.setToolTip("在與透明背景接觸的外側補外框")
         self.outline_pixels.valueChanged.connect(self.queue_update)
 

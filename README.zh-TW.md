@@ -8,15 +8,26 @@ SpriteMaker PySide 是一款以 Python + PySide6 製作的本地 Windows 桌面�
 
 Windows 使用者可以從 GitHub Releases 下載已打包版本：
 
-- [SpriteMakerPySide-2.3.1-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.3.3-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 解壓縮後執行：
 
 ```text
-SpriteMakerPySide-2.3.1.exe
+SpriteMakerPySide-2.3.3.exe
 ```
 
 Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者不需要另外安裝 Python。
+
+## 2.3.3 更新重點
+
+- 將 **全 Frame 選取框**重新命名為 **範圍選取框**。
+- 範圍選取框的同步移動、縮放、旋轉、翻轉與刪除，現在只作用於 frame 序列中目前選取的 frame。
+- 單選一個縮圖時只修改該 frame；以 `Shift` 選取連續區間或以 `Ctrl` 選取不連續縮圖時，只修改實際選取的 frame。
+
+## 2.3.2 更新重點
+
+- Spritesheet 預設改為扣除邊緣 `1 px`、啟用扣邊抗鋸齒，並使用 `2.00 px` 輪廓平滑。
+- 外框維持預設關閉，但預先將外框寬度設為 `1 px`，啟用後可直接使用。
 
 ## 2.3.1 更新重點
 
@@ -81,7 +92,7 @@ Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者
 
 ## 2.2.4 更新重點
 
-- 新增 **全 Frame 選取框**，可將選取內容的移動、縮放、自由旋轉、翻轉與刪除同步套用到多個 frame。影格列只選一幀時作用於全部 frame，多選時只作用於選取的 frame。
+- 當時以 **全 Frame 選取框**名稱加入多 frame 同步變形；2.3.3 已重新命名為 **範圍選取框**，並改為嚴格只作用於影格列實際選取的 frame。
 - 編輯模式的影格列新增包含端點的 `Shift` 範圍選取：先點一個 frame，再按住 `Shift` 點另一個 frame，兩者之間的所有 frame 都會被選取。
 - 選取的 frame 區間可維持內部順序整組拖曳；開啟動畫預覽時，也會將選取區間設為預設播放開始／結束範圍。
 - 多 frame 同步編輯會記錄成一筆全專案 undo/redo 操作。
@@ -169,7 +180,7 @@ frame_10.png
 - 先點一個 frame，再按住 `Shift` 點另一個 frame，即可選取包含兩端的連續區間。
 - 影格列有焦點時按 `Delete`，會一次刪除所有已選 frame；一次 undo 可還原完整範圍。
 - 拖曳任一已選縮圖，可將整段選取區間移動到新位置，區間內順序不變。
-- 建立矩形或繩索選取前開啟 **全 Frame 選取框**。影格列只選一幀時會同步全部 frame；選取兩幀以上時只同步目前選取區間。
+- 建立矩形或繩索選取前開啟 **範圍選取框**，同步操作只會套用到 frame 序列目前選取的縮圖。
 - 移動、縮放、旋轉、翻轉或刪除選取內容，會將相同變形套用到每個目標 frame；一次復原即可還原完整同步操作。
 - 選取區間後開啟動畫預覽，該區間會成為預設播放範圍。
 
