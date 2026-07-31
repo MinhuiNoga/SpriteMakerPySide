@@ -223,6 +223,186 @@ def option_selection_mask(value: object, height: int, width: int) -> Tuple[np.nd
     return selection, True
 
 
+def pixel_compression_bounds(
+    image: QImage,
+    selection_mask_image: Optional[QImage] = None,
+) -> Tuple[int, int, int, int]:
+    """Return the selected processing bounds as x, y, width, height."""
+    width = image.width()
+    height = image.height()
+    selection, selection_applied = option_selection_mask(selection_mask_image, height, width)
+    if not selection_applied:
+        return 0, 0, width, height
+    if not np.any(selection):
+        return 0, 0, 0, 0
+
+    yy, xx = np.nonzero(selection)
+    x0 = int(np.min(xx))
+    y0 = int(np.min(yy))
+    x1 = int(np.max(xx)) + 1
+    y1 = int(np.max(yy)) + 1
+    return x0, y0, x1 - x0, y1 - y0
+
+
+def _alpha_weighted_area_sample(
+    region: np.ndarray,
+    selection: np.ndarray,
+    target_width: int,
+    target_height: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    selection_f = selection.astype(np.float32)
+    alpha = region[:, :, 3].astype(np.float32) / 255.0
+    alpha_weight = alpha * selection_f
+    rgb_weight = region[:, :, :3].astype(np.float32) * alpha_weight[:, :, None]
+
+    target_size = (target_width, target_height)
+    coverage = cv2.resize(selection_f, target_size, interpolation=cv2.INTER_AREA)
+    sampled_alpha_weight = cv2.resize(alpha_weight, target_size, interpolation=cv2.INTER_AREA)
+    sampled_rgb_weight = cv2.resize(rgb_weight, target_size, interpolation=cv2.INTER_AREA)
+
+    sampled_alpha = np.divide(
+        sampled_alpha_weight,
+        coverage,
+        out=np.zeros_like(sampled_alpha_weight),
+        where=coverage > 1e-6,
+    )
+    sampled_rgb = np.divide(
+        sampled_rgb_weight,
+        sampled_alpha_weight[:, :, None],
+        out=np.zeros_like(sampled_rgb_weight),
+        where=sampled_alpha_weight[:, :, None] > 1e-6,
+    )
+
+    sampled = np.zeros((target_height, target_width, 4), dtype=np.uint8)
+    sampled[:, :, :3] = np.rint(np.clip(sampled_rgb, 0.0, 255.0)).astype(np.uint8)
+    sampled[:, :, 3] = np.rint(np.clip(sampled_alpha * 255.0, 0.0, 255.0)).astype(np.uint8)
+    return sampled, coverage
+
+
+def _dominant_area_sample(
+    region: np.ndarray,
+    selection: np.ndarray,
+    target_width: int,
+    target_height: int,
+) -> np.ndarray:
+    source_height, source_width, _ = region.shape
+    x_edges = np.rint(np.linspace(0, source_width, target_width + 1)).astype(np.int32)
+    y_edges = np.rint(np.linspace(0, source_height, target_height + 1)).astype(np.int32)
+    sampled = np.zeros((target_height, target_width, 4), dtype=np.uint8)
+
+    for target_y in range(target_height):
+        y0 = min(source_height - 1, int(y_edges[target_y]))
+        y1 = max(y0 + 1, min(source_height, int(y_edges[target_y + 1])))
+        for target_x in range(target_width):
+            x0 = min(source_width - 1, int(x_edges[target_x]))
+            x1 = max(x0 + 1, min(source_width, int(x_edges[target_x + 1])))
+
+            block = region[y0:y1, x0:x1]
+            block_selection = selection[y0:y1, x0:x1]
+            selected_count = int(np.count_nonzero(block_selection))
+            if selected_count <= 0:
+                continue
+
+            alpha = block[:, :, 3].astype(np.float32) / 255.0
+            sampled[target_y, target_x, 3] = np.uint8(
+                round(float(np.sum(alpha * block_selection)) / selected_count * 255.0)
+            )
+
+            visible = block_selection & (alpha > 0.0)
+            if not np.any(visible):
+                continue
+
+            colors = block[:, :, :3][visible].astype(np.float32)
+            weights = alpha[visible]
+            quantized = (colors.astype(np.uint16) >> 3)
+            keys = (quantized[:, 0] << 10) | (quantized[:, 1] << 5) | quantized[:, 2]
+            unique_keys, inverse = np.unique(keys, return_inverse=True)
+            bin_weights = np.bincount(inverse, weights=weights)
+            winning_key = unique_keys[int(np.argmax(bin_weights))]
+            winning = keys == winning_key
+            winning_weights = weights[winning]
+            total_weight = float(np.sum(winning_weights))
+            if total_weight <= 1e-6:
+                continue
+            dominant_rgb = np.sum(colors[winning] * winning_weights[:, None], axis=0) / total_weight
+            sampled[target_y, target_x, :3] = np.rint(np.clip(dominant_rgb, 0.0, 255.0)).astype(np.uint8)
+
+    return sampled
+
+
+def pixel_compress_image(
+    image: QImage,
+    target_width: int,
+    target_height: int,
+    mode: str = "area",
+    selection_mask_image: Optional[QImage] = None,
+) -> QImage:
+    """Pixelate the selected current-layer region without changing image dimensions."""
+    source = qimage_to_array(image)
+    height, width, _ = source.shape
+    selection, selection_applied = option_selection_mask(selection_mask_image, height, width)
+    if selection_applied and not np.any(selection):
+        return image.copy()
+
+    x, y, region_width, region_height = pixel_compression_bounds(image, selection_mask_image)
+    if region_width <= 0 or region_height <= 0:
+        return image.copy()
+
+    target_width = max(1, min(int(target_width), region_width))
+    target_height = max(1, min(int(target_height), region_height))
+    if target_width == region_width and target_height == region_height:
+        return image.copy()
+
+    region = source[y : y + region_height, x : x + region_width]
+    region_selection = selection[y : y + region_height, x : x + region_width]
+    normalized_mode = str(mode).strip().lower()
+
+    if normalized_mode == "nearest":
+        sampled = cv2.resize(
+            region,
+            (target_width, target_height),
+            interpolation=cv2.INTER_NEAREST,
+        )
+        if selection_applied and not np.all(region_selection):
+            sampled_selection = cv2.resize(
+                region_selection.astype(np.uint8),
+                (target_width, target_height),
+                interpolation=cv2.INTER_NEAREST,
+            ) > 0
+            fallback, coverage = _alpha_weighted_area_sample(
+                region,
+                region_selection,
+                target_width,
+                target_height,
+            )
+            replace = ~sampled_selection & (coverage > 1e-6)
+            sampled[replace] = fallback[replace]
+    elif normalized_mode == "dominant":
+        sampled = _dominant_area_sample(
+            region,
+            region_selection,
+            target_width,
+            target_height,
+        )
+    else:
+        sampled, _ = _alpha_weighted_area_sample(
+            region,
+            region_selection,
+            target_width,
+            target_height,
+        )
+
+    restored = cv2.resize(
+        sampled,
+        (region_width, region_height),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    output = source.copy()
+    output_region = output[y : y + region_height, x : x + region_width]
+    output_region[region_selection] = restored[region_selection]
+    return array_to_qimage(output)
+
+
 def debug_overlay_image(width: int, height: int, masks: Mapping[str, np.ndarray], mode: str) -> QImage:
     overlay = np.zeros((height, width, 4), dtype=np.uint8)
 
@@ -562,6 +742,51 @@ def flood_fill(
     fill_mask = contiguous_region(base_mask, x, y)
     arr[fill_mask] = replacement
     return array_to_qimage(arr)
+
+
+def consolidate_similar_colors(
+    image: QImage,
+    sampled_color: QColor,
+    tolerance: int,
+    selection_mask_image: Optional[QImage] = None,
+) -> Tuple[QImage, QImage, dict]:
+    """Collapse all selected nontransparent pixels near sampled_color to its RGB."""
+    arr = qimage_to_array(image)
+    height, width, _ = arr.shape
+    selection_mask, selection_applied = option_selection_mask(
+        selection_mask_image,
+        height,
+        width,
+    )
+
+    sampled_rgb = np.array(
+        [sampled_color.red(), sampled_color.green(), sampled_color.blue()],
+        dtype=np.int32,
+    )
+    rgb_delta = arr[:, :, :3].astype(np.int32) - sampled_rgb
+    rgb_distance_sq = np.sum(rgb_delta * rgb_delta, axis=2)
+    tolerance = max(0, min(255, int(tolerance)))
+    match_mask = (
+        (rgb_distance_sq <= tolerance * tolerance * 3)
+        & (arr[:, :, 3] > 0)
+        & selection_mask
+    )
+    changed_mask = match_mask & np.any(arr[:, :, :3] != sampled_rgb, axis=2)
+
+    result = arr.copy()
+    result[match_mask, :3] = sampled_rgb.astype(np.uint8)
+
+    overlay = np.zeros((height, width, 4), dtype=np.uint8)
+    overlay[match_mask] = np.array([255, 32, 32, 136], dtype=np.uint8)
+    stats = {
+        "sampledColor": sampled_color.name().upper(),
+        "tolerance": tolerance,
+        "selectionApplied": selection_applied,
+        "scopePixelCount": int(np.count_nonzero(selection_mask)),
+        "matchedPixelCount": int(np.count_nonzero(match_mask)),
+        "changedPixelCount": int(np.count_nonzero(changed_mask)),
+    }
+    return array_to_qimage(result), array_to_qimage(overlay), stats
 
 
 def contiguous_region(mask: np.ndarray, start_x: int, start_y: int) -> np.ndarray:

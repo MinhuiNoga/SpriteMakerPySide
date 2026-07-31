@@ -9,7 +9,7 @@ from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, QTimer, Qt, Si
 from PySide6.QtGui import QColor, QCursor, QImage, QMouseEvent, QPainter, QPainterPath, QPen, QTransform
 from PySide6.QtWidgets import QListWidget, QWidget
 
-from .image_ops import erase_color, flood_fill, qcolor_to_rgba, qimage_to_array
+from .image_ops import consolidate_similar_colors, erase_color, flood_fill, qcolor_to_rgba, qimage_to_array
 from .models import Frame
 
 
@@ -152,6 +152,9 @@ class CanvasWidget(QWidget):
         self.show_checker_bg = True
         self.export_size: Optional[QSize] = None
         self.debug_overlay_image: Optional[QImage] = None
+        self.color_consolidation_overlay_image: Optional[QImage] = None
+        self.color_consolidation_sample: Optional[QColor] = None
+        self.color_consolidation_stats: Optional[dict] = None
         self._drawing = False
         self._last_pos: Optional[QPoint] = None
         self._hover_pos: Optional[QPoint] = None
@@ -204,6 +207,7 @@ class CanvasWidget(QWidget):
         self.selection_rect = None
         self.lasso_points = []
         self.debug_overlay_image = None
+        self._clear_color_consolidation_preview()
         self.updateGeometry()
         self.update()
 
@@ -250,13 +254,23 @@ class CanvasWidget(QWidget):
         self.update()
 
     def set_tool(self, tool: str) -> None:
+        if self.tool == "color_consolidate" and tool != self.tool:
+            self.cancel_color_consolidation(emit_status=False)
         if tool not in {"select", "lasso"}:
             self.commit_floating_selection()
         if tool != self.tool:
             self._clear_brush_stroke_state()
         self.tool = tool
         self._update_cursor()
-        self.status_changed.emit(f"工具：{tool}")
+        if tool == "color_consolidate":
+            self.status_changed.emit("色塊統一：點擊目前圖層中要保留的標準色")
+        else:
+            self.status_changed.emit(f"工具：{tool}")
+
+    def set_tolerance(self, tolerance: int) -> None:
+        self.tolerance = max(0, min(255, int(tolerance)))
+        if self.color_consolidation_sample is not None:
+            self.refresh_color_consolidation_preview()
 
     def set_zoom(self, zoom: float) -> None:
         self.zoom = max(0.1, min(8.0, zoom))
@@ -320,6 +334,11 @@ class CanvasWidget(QWidget):
         painter.drawImage(self._image_rect, image)
         if self.debug_overlay_image is not None and not self.debug_overlay_image.isNull():
             painter.drawImage(self._image_rect, self.debug_overlay_image)
+        if (
+            self.color_consolidation_overlay_image is not None
+            and not self.color_consolidation_overlay_image.isNull()
+        ):
+            painter.drawImage(self._image_rect, self.color_consolidation_overlay_image)
         self._paint_floating_selection(painter)
         self._paint_selection_overlay(painter)
         self._paint_brush_preview(painter)
@@ -367,6 +386,11 @@ class CanvasWidget(QWidget):
         if event.button() != Qt.MouseButton.LeftButton or not self.frame:
             return
         self.setFocus()
+        if self.tool == "color_consolidate":
+            pos = self._event_to_image_pos(event)
+            if pos is not None:
+                self._sample_color_for_consolidation(pos)
+            return
         if event.modifiers() & Qt.KeyboardModifier.AltModifier:
             pos = self._event_to_image_pos(event)
             if pos is not None:
@@ -596,6 +620,14 @@ class CanvasWidget(QWidget):
                 self._finish_edit("已更新圖層")
 
     def keyPressEvent(self, event) -> None:
+        if self.tool == "color_consolidate":
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if self.apply_color_consolidation():
+                    event.accept()
+                    return
+            elif event.key() == Qt.Key.Key_Escape and self.cancel_color_consolidation():
+                event.accept()
+                return
         if event.key() == Qt.Key.Key_Escape and self.finish_active_selection():
             event.accept()
             return
@@ -619,11 +651,15 @@ class CanvasWidget(QWidget):
             return True
         if self.selection_rect:
             self.selection_rect.translate(dx, dy)
+            if self.color_consolidation_sample is not None:
+                self.refresh_color_consolidation_preview()
             self.status_changed.emit(f"已移動選取框 {dx}, {dy}")
             self.update()
             return True
         if self.lasso_points:
             self.lasso_points = [QPoint(point.x() + dx, point.y() + dy) for point in self.lasso_points]
+            if self.color_consolidation_sample is not None:
+                self.refresh_color_consolidation_preview()
             self.status_changed.emit(f"已移動繩索選取 {dx}, {dy}")
             self.update()
             return True
@@ -1120,6 +1156,8 @@ class CanvasWidget(QWidget):
     def clear_selection(self) -> None:
         self.selection_rect = None
         self.lasso_points = []
+        if self.color_consolidation_sample is not None:
+            self.refresh_color_consolidation_preview()
         self.update()
 
     def has_active_selection(self) -> bool:
@@ -1183,6 +1221,75 @@ class CanvasWidget(QWidget):
         alpha = color.alpha()
         self.status_changed.emit(f"已取樣顏色 {color.name().upper()} / {alpha}")
         self.update()
+
+    def _sample_color_for_consolidation(self, pos: QPoint) -> None:
+        if not self.frame:
+            return
+        color = self.frame.active_layer.image.pixelColor(pos)
+        if color.alpha() == 0:
+            self.status_changed.emit("色塊統一只從目前圖層的可見像素取樣")
+            return
+        self.color_consolidation_sample = QColor(color)
+        self.color = QColor(color)
+        self.color_sampled.emit(QColor(color))
+        self.refresh_color_consolidation_preview()
+
+    def refresh_color_consolidation_preview(self) -> bool:
+        if not self.frame or self.color_consolidation_sample is None:
+            return False
+        _, overlay, stats = consolidate_similar_colors(
+            self.frame.active_layer.image,
+            self.color_consolidation_sample,
+            self.tolerance,
+            self.selection_mask_image(),
+        )
+        self.color_consolidation_overlay_image = overlay
+        self.color_consolidation_stats = stats
+        scope = "選取範圍" if stats["selectionApplied"] else "完整圖層"
+        self.status_changed.emit(
+            f"色塊統一預覽：{scope}，標準色 {stats['sampledColor']}，"
+            f"容差 {stats['tolerance']}，命中 {stats['matchedPixelCount']}，"
+            f"將變更 {stats['changedPixelCount']} pixel；Enter 套用 / Esc 取消"
+        )
+        self.update()
+        return True
+
+    def apply_color_consolidation(self) -> bool:
+        if not self.frame or self.color_consolidation_sample is None:
+            self.status_changed.emit("請先點擊目前圖層中要保留的標準色")
+            return False
+        result, _, stats = consolidate_similar_colors(
+            self.frame.active_layer.image,
+            self.color_consolidation_sample,
+            self.tolerance,
+            self.selection_mask_image(),
+        )
+        if stats["changedPixelCount"] <= 0:
+            self.status_changed.emit("目前容差內沒有需要統一的近似色")
+            return False
+
+        self.editing_started.emit()
+        self.frame.active_layer.image = result
+        self.frame.mark_dirty()
+        self._clear_color_consolidation_preview()
+        scope = "選取範圍" if stats["selectionApplied"] else "完整圖層"
+        self._finish_edit(
+            f"已統一{scope}內 {stats['changedPixelCount']} 個 pixel 為 {stats['sampledColor']}"
+        )
+        return True
+
+    def cancel_color_consolidation(self, emit_status: bool = True) -> bool:
+        had_preview = self.color_consolidation_sample is not None
+        self._clear_color_consolidation_preview()
+        if had_preview and emit_status:
+            self.status_changed.emit("已取消色塊統一預覽")
+        self.update()
+        return had_preview
+
+    def _clear_color_consolidation_preview(self) -> None:
+        self.color_consolidation_overlay_image = None
+        self.color_consolidation_sample = None
+        self.color_consolidation_stats = None
 
     def _paint_checker(self, painter: QPainter) -> None:
         size = 16
@@ -1443,6 +1550,8 @@ class CanvasWidget(QWidget):
             self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         elif self.tool == "fill":
             self.setCursor(QCursor(Qt.CursorShape.WhatsThisCursor))
+        elif self.tool == "color_consolidate":
+            self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
         elif self.tool in {"select", "lasso"}:
             self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
         elif self.tool in {"wand", "global_wand", "universal_wand"}:

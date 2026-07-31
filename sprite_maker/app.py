@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 
 from .image_ops import add_outline, applyColorSpillCleanupToImageData, erase_color, qcolor_to_rgba, trim_alpha_edges
 from .models import Frame, Layer, clone_image, frame_from_image, frame_from_qimage, make_blank_image
+from .pixel_compression_dialog import PixelCompressionDialog
 from .startup_dialog import StartupDialog
 from .video_import_dialog import VideoImportDialog
 from .widgets import CanvasWidget, FrameStripWidget
@@ -278,6 +279,7 @@ class MainWindow(QMainWindow):
             ("畫筆", "pen", "B"),
             ("橡皮擦", "eraser", "E"),
             ("填色", "fill", "G"),
+            ("色塊統一", "color_consolidate", None),
             ("魔術棒", "wand", "W"),
             ("單幀去色", "global_wand", "Shift+W"),
             ("全域去色", "universal_wand", "U"),
@@ -317,7 +319,7 @@ class MainWindow(QMainWindow):
         self.tolerance_spin = QSpinBox()
         self.tolerance_spin.setRange(0, 255)
         self.tolerance_spin.setValue(15)
-        self.tolerance_spin.setToolTip("填色/去色的顏色容差")
+        self.tolerance_spin.setToolTip("填色、去色與色塊統一的顏色容差")
         self.tolerance_spin.valueChanged.connect(self.set_tolerance)
         settings_toolbar.addWidget(self.tolerance_spin)
         self.centerline_toggle = QCheckBox("中心線")
@@ -400,6 +402,7 @@ class MainWindow(QMainWindow):
         self.add_action(edit_toolbar, "水平翻轉", lambda: self.canvas.flip_floating_selection(True), "H")
         self.add_action(edit_toolbar, "垂直翻轉", lambda: self.canvas.flip_floating_selection(False), "Shift+H")
         self.add_action(edit_toolbar, "刪除選取", self.delete_selected_or_frame, "Del")
+        self.add_action(edit_toolbar, "像素壓縮化", self.show_pixel_compression)
         edit_toolbar.addSeparator()
         edit_toolbar.addWidget(QLabel("變形品質"))
         self.transform_quality_combo = QComboBox()
@@ -1050,6 +1053,7 @@ class MainWindow(QMainWindow):
         index = item.data(Qt.ItemDataRole.UserRole)
         if index is None or index == frame.active_layer_index:
             return
+        self.canvas.cancel_color_consolidation(emit_status=False)
         frame.active_layer_index = index
         self.opacity.blockSignals(True)
         self.opacity.setValue(round(frame.active_layer.opacity * 100))
@@ -1131,7 +1135,7 @@ class MainWindow(QMainWindow):
             )
 
     def set_tolerance(self, value: int) -> None:
-        self.canvas.tolerance = value
+        self.canvas.set_tolerance(value)
         self.update_spill_cleanup_labels()
 
     def update_spill_cleanup_labels(self) -> None:
@@ -1362,6 +1366,35 @@ class MainWindow(QMainWindow):
     def paste_selection(self) -> None:
         self.canvas.paste_selection()
 
+    def show_pixel_compression(self) -> None:
+        frame = self.current_frame
+        if not frame or not frame.layers:
+            self.status.showMessage("沒有可處理的目前圖層")
+            return
+
+        self.canvas.commit_floating_selection()
+        selection_mask = self.canvas.selection_mask_image()
+        dialog = PixelCompressionDialog(
+            frame.active_layer.image,
+            selection_mask,
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        processed = dialog.processed_image()
+        if processed == frame.active_layer.image:
+            self.status.showMessage("像素壓縮化沒有改變目前圖層")
+            return
+
+        self.push_undo()
+        frame.active_layer.image = processed
+        frame.mark_dirty()
+        scope = "選取區域" if selection_mask is not None else "完整圖層"
+        self.on_image_changed(
+            f"已像素壓縮化目前圖層的{scope}：{dialog.processing_summary()}"
+        )
+
     def delete_selected_or_frame(self) -> None:
         focus = QApplication.focusWidget()
         timeline_focused = focus is self.thumbnails or (
@@ -1428,6 +1461,8 @@ class MainWindow(QMainWindow):
         self.after_project_changed(message)
 
     def on_image_changed(self, message: str = "已更新") -> None:
+        if self.canvas.color_consolidation_sample is not None:
+            self.canvas.cancel_color_consolidation(emit_status=False)
         frame = self.current_frame
         if frame:
             frame.mark_dirty()

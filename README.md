@@ -8,15 +8,43 @@ SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor bu
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.3.3-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.4.1-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.3.3.exe
+SpriteMakerPySide-2.4.1.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 2.4.1
+
+- Replaces the fixed `1/2`, `1/4`, and `1/8` Pixel Compression preset buttons with a continuous **Output Ratio** slider.
+- The slider ranges from `1%` to `100%` in `0.5%` steps and defaults to `25%`.
+- The current percentage and familiar fractions such as `1/2`, `1/4`, and `1/8` are displayed beside the slider.
+- Dragging updates the logical width and height immediately, but the image preview is recalculated only after release to reduce unnecessary work.
+- Manual logical width and height inputs remain available. Unlocking the aspect ratio disables the single-ratio slider and displays the independent width/height percentages.
+
+## What's New In 2.4.0
+
+- Adds **Color Consolidation** for collapsing diffusion-generated near-duplicate colors into one sampled color.
+- Click a visible pixel on the active layer to sample the canonical color. The existing toolbar tolerance controls which nearby RGB colors are matched.
+- The preview scans every matching pixel in the rectangular/lasso selection, even when matching pixels are disconnected. With no active selection, it scans the entire active layer.
+- A red overlay previews all matched pixels and the status bar reports the sampled color, tolerance, matched count, and actual changed count.
+- Press `Enter` to apply the preview or `Esc` to cancel it. Clicking another pixel resamples the canonical color.
+- Only RGB is consolidated. Per-pixel alpha remains unchanged, and fully transparent pixels are ignored.
+- Only the active layer of the current frame is modified, with one undo/redo history entry.
+
+## What's New In 2.3.4
+
+- Adds **Pixel Compression** to the editor toolbar.
+- Pixel Compression affects only the active layer of the current frame. Other layers and frames remain unchanged.
+- A rectangular or lasso selection limits processing to the selected pixels; with no active selection, the entire active layer is processed.
+- The selected area is reduced to a user-defined logical resolution, then restored to its original dimensions with nearest-neighbor scaling for a controlled pixelated result.
+- Includes alpha-weighted area sampling, dominant area color, and nearest-neighbor sampling modes. Alpha-aware sampling prevents invisible RGB values in transparent pixels from contaminating visible colors.
+- Includes locked aspect ratio, `1/2`, `1/4`, and `1/8` presets, plus side-by-side before/after preview.
+- Applying the result creates one undo step and does not change the frame, layer, canvas, or selection dimensions.
 
 ## What's New In 2.3.3
 
@@ -235,6 +263,31 @@ Enable **Pixel Blend** to blend only the outer pixels of pen strokes with nearby
 
 The defaults are 75% strength, a 2 px edge, and a 5 px sample radius. The stroke core always uses the current pen color. Each mouse-down starts from a stable image snapshot, so a stroke never repeatedly samples its own newly painted pixels. After mouse release, the status bar reports the number of pixels that actually differed from a normal solid pen stroke. This mode affects only the pen; eraser, fill, and edge-spill cleanup behavior are unchanged.
 
+### Pixel Compression
+
+Use **Pixel Compression** on the editor toolbar to create a lower-resolution pixel style while keeping the original image dimensions:
+
+- It processes only the active layer of the current frame.
+- With an active rectangular or lasso selection, only selected pixels are changed. Without a selection, the whole active layer is processed.
+- Choose the logical output width and height, or use the `1%` to `100%` output-ratio slider. The slider supports `0.5%` steps and displays familiar fractions at `50%`, `25%`, and `12.5%`.
+- Slider dragging updates the target dimensions immediately and recalculates the preview after release. Unlock the aspect ratio to enter independent custom width and height values.
+- **Alpha-Weighted Area** produces stable reduced colors while ignoring invisible RGB contamination from transparent pixels.
+- **Dominant Area Color** keeps the most prominent local color in each logical pixel block.
+- **Nearest Neighbor** samples hard pixels directly.
+- The reduced result is enlarged back to the original processing-area size with nearest-neighbor scaling. Pixels outside the selection, other layers, and other frames remain untouched.
+- The dialog shows original/result previews before applying. Apply creates one undo/redo history entry.
+
+### Color Consolidation
+
+Use **Color Consolidation** to remove small near-duplicate color variations produced by diffusion-based image generation:
+
+1. Optionally create a rectangular or lasso selection around the part to clean.
+2. Select **Color Consolidation**, then click the correct color that should be retained.
+3. Adjust the existing toolbar tolerance if needed. The red overlay updates immediately.
+4. Press `Enter` to replace every matched RGB value with the sampled RGB, or `Esc` to cancel.
+
+Unlike Paint Bucket, Color Consolidation does not require matching pixels to be connected. It scans the full selection, or the entire active layer when there is no selection. Every pixel is compared directly with the original sampled color, so tolerance cannot spread progressively through a gradient. Fully transparent pixels are ignored; visible and semitransparent pixels retain their original alpha values.
+
 ### Tools
 
 - **Selection** (`V`): rectangular selection.
@@ -242,6 +295,7 @@ The defaults are 75% strength, a 2 px edge, and a 5 px sample radius. The stroke
 - **Pen** (`B`): draw with the current color and brush size.
 - **Eraser** (`E`): erase with the current brush size.
 - **Fill** (`G`): flood fill the active layer using the current color and tolerance. A rectangular selection limits the flood fill to that selection. With a lasso selection active, clicking inside it directly replaces the whole lasso area with the current color.
+- **Color Consolidation**: sample one canonical color and replace all similar RGB values in the current selection or active layer, regardless of connectivity. `Enter` applies and `Esc` cancels the preview.
 - **Magic Wand** (`W`): erase a connected color region on the active layer.
 - **Single-Frame Color Erase** (`Shift+W`): erase matching pixels from every layer in the current frame.
 - **Global Color Erase** (`U`): erase matching pixels from every layer in every frame.
