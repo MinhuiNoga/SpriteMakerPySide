@@ -8,15 +8,23 @@ SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor bu
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.4.1-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.4.2-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.4.1.exe
+SpriteMakerPySide-2.4.2.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 2.4.2
+
+- Expands editor import and drag-and-drop beyond PNG/JPEG to common image formats.
+- Supports JPEG variants (`JPE`, `JFIF`, `JIF`, `JFI`), `BMP/DIB`, `GIF`, `WebP`, `TIFF`, `TGA`, `ICO/ICNS`, `PBM/PGM/PPM`, `XBM/XPM`, and `SVG/SVGZ`.
+- Uses Qt image decoding with automatic orientation and a Pillow fallback for broader compatibility.
+- Animated or multi-page image files import their first frame/page. Use the video importer for video frame extraction.
+- Multiple imported images retain natural filename sorting, such as `frame_2` before `frame_10`.
 
 ## What's New In 2.4.1
 
@@ -190,6 +198,8 @@ You can also drag files into the editor:
 - Drag one or more images into the editor to append them to the end of the current frame sequence.
 - Drag a video into the editor to open it in the video importer.
 - Dragging videos into the video import window itself also loads that video.
+
+Supported image imports include PNG, JPEG/JPG/JPE/JFIF/JIF/JFI, BMP/DIB, GIF, WebP, TIFF, TGA, ICO/ICNS, PBM/PGM/PPM, XBM/XPM, and SVG/SVGZ. Animated GIF and multi-page image files use the first frame/page.
 
 ### Frame Timeline
 

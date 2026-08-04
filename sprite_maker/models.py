@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage, QPainter
+from PySide6.QtGui import QImage, QImageReader, QPainter
 
 
 RGBA_FORMAT = QImage.Format.Format_RGBA8888
@@ -103,9 +103,32 @@ class Frame:
 
 
 def frame_from_image(path: Path) -> Frame:
-    image = QImage(str(path))
+    reader = QImageReader(str(path))
+    reader.setAutoTransform(True)
+    image = reader.read()
+    qt_error = reader.errorString() if image.isNull() else ""
+
     if image.isNull():
-        raise ValueError(f"Cannot read image: {path}")
+        try:
+            from PIL import Image, ImageOps
+
+            with Image.open(path) as source:
+                source.seek(0)
+                rgba = ImageOps.exif_transpose(source).convert("RGBA")
+                data = rgba.tobytes()
+                image = QImage(
+                    data,
+                    rgba.width,
+                    rgba.height,
+                    rgba.width * 4,
+                    RGBA_FORMAT,
+                ).copy()
+        except Exception as exc:
+            details = f"Qt: {qt_error or 'unknown error'}; Pillow: {exc}"
+            raise ValueError(f"無法讀取圖片：{path}\n{details}") from exc
+
+    if image.isNull():
+        raise ValueError(f"無法讀取圖片：{path}")
     image = image.convertToFormat(RGBA_FORMAT)
     return Frame(
         name=path.name,

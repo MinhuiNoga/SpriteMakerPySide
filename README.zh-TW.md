@@ -8,15 +8,23 @@ SpriteMaker PySide 是一款以 Python + PySide6 製作的本地 Windows 桌面�
 
 Windows 使用者可以從 GitHub Releases 下載已打包版本：
 
-- [SpriteMakerPySide-2.4.1-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.4.2-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 解壓縮後執行：
 
 ```text
-SpriteMakerPySide-2.4.1.exe
+SpriteMakerPySide-2.4.2.exe
 ```
 
 Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者不需要另外安裝 Python。
+
+## 2.4.2 更新重點
+
+- 將編輯模式的匯入與拖放功能由 PNG／JPEG 擴充到普遍使用的其他圖片格式。
+- 支援 JPEG 延伸格式（`JPE`、`JFIF`、`JIF`、`JFI`）、`BMP/DIB`、`GIF`、`WebP`、`TIFF`、`TGA`、`ICO/ICNS`、`PBM/PGM/PPM`、`XBM/XPM` 與 `SVG/SVGZ`。
+- 使用 Qt 圖片解碼與自動方向校正，並加入 Pillow 後備載入，提高不同圖片來源的相容性。
+- 動態或多頁圖片會匯入第一個 frame／頁面；影片的逐幀擷取仍使用影片匯入功能。
+- 複數圖片維持依檔名自然排序，例如 `frame_2` 會排在 `frame_10` 前面。
 
 ## 2.4.1 更新重點
 
@@ -190,6 +198,8 @@ frame_10.png
 - 將一張或多張圖片拖入編輯器，會追加到目前 frame 序列最後面。
 - 將影片拖入編輯器，會直接開啟影片匯入流程。
 - 將影片拖入「匯入影片」視窗本身，也會直接載入該影片。
+
+可匯入的圖片格式包含 PNG、JPEG/JPG/JPE/JFIF/JIF/JFI、BMP/DIB、GIF、WebP、TIFF、TGA、ICO/ICNS、PBM/PGM/PPM、XBM/XPM 與 SVG/SVGZ。動態 GIF 與多頁圖片會使用第一個 frame／頁面。
 
 ### 影格序列
 

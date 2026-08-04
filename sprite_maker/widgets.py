@@ -307,7 +307,7 @@ class CanvasWidget(QWidget):
 
         if not self.frame:
             painter.setPen(Qt.GlobalColor.white)
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "請匯入 PNG/JPG 開始")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "請匯入圖片開始")
             painter.end()
             return
 

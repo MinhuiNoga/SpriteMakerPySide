@@ -49,7 +49,33 @@ from .widgets import CanvasWidget, FrameStripWidget
 from .workers import UniversalEraseWorker
 
 
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+IMAGE_EXTENSION_ORDER = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".jpe",
+    ".jfif",
+    ".jif",
+    ".jfi",
+    ".bmp",
+    ".dib",
+    ".gif",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".tga",
+    ".ico",
+    ".icns",
+    ".pbm",
+    ".pgm",
+    ".ppm",
+    ".xbm",
+    ".xpm",
+    ".svg",
+    ".svgz",
+)
+IMAGE_EXTENSIONS = frozenset(IMAGE_EXTENSION_ORDER)
+IMAGE_FILE_FILTER = "支援的圖片 (" + " ".join(f"*{extension}" for extension in IMAGE_EXTENSION_ORDER) + ")"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv"}
 
 
@@ -846,7 +872,7 @@ class MainWindow(QMainWindow):
             self,
             "選擇圖片",
             str(self.default_file_dialog_directory()),
-            "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
+            IMAGE_FILE_FILTER,
         )
         paths = [Path(file) for file in files]
         if paths:
