@@ -3,13 +3,19 @@ from __future__ import annotations
 import math
 from typing import List, Optional
 
-import cv2
 import numpy as np
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, QSize, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QImage, QMouseEvent, QPainter, QPainterPath, QPen, QTransform
 from PySide6.QtWidgets import QListWidget, QWidget
 
-from .image_ops import consolidate_similar_colors, erase_color, flood_fill, qcolor_to_rgba, qimage_to_array
+from .image_ops import (
+    alpha_aware_gaussian_blur,
+    consolidate_similar_colors,
+    erase_color,
+    flood_fill,
+    qcolor_to_rgba,
+    qimage_to_array,
+)
 from .models import Frame
 
 
@@ -134,18 +140,15 @@ class CanvasWidget(QWidget):
         self.brush_size = 8
         self.tolerance = 15
         self.color = QColor("#ff0000")
-        self.pixel_blend_enabled = False
-        self.pixel_blend_strength = 0.75
-        self.pixel_blend_edge_width = 2
-        self.pixel_blend_sample_radius = 5
-        self.pixel_blend_sample_visible_layers = True
-        self.pixel_blend_include_transparent = False
-        self._brush_source_array: Optional[np.ndarray] = None
-        self._brush_fallback_source_array: Optional[np.ndarray] = None
+        self.blur_brush_enabled = False
+        self.blur_brush_strength = 0.5
+        self.blur_brush_radius = 4
+        self.blur_brush_hardness = 0.5
+        self.blur_brush_preserve_alpha = True
         self._brush_base_layer_array: Optional[np.ndarray] = None
-        self._brush_stroke_mask: Optional[np.ndarray] = None
-        self._brush_edge_factor: Optional[np.ndarray] = None
-        self._brush_blended_mask: Optional[np.ndarray] = None
+        self._brush_stroke_factor: Optional[np.ndarray] = None
+        self._brush_changed_mask: Optional[np.ndarray] = None
+        self._brush_selection_mask: Optional[np.ndarray] = None
         self.zoom = 1.0
         self.show_axes = False
         self.bg_color = QColor("#808080")
@@ -607,13 +610,13 @@ class CanvasWidget(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self._drawing:
             self._drawing = False
             self._last_pos = None
-            blended_pixels = self._brush_blended_pixel_count()
+            blurred_pixels = self._brush_changed_pixel_count()
             self._clear_brush_stroke_state()
-            if self.tool == "pen" and self.pixel_blend_enabled:
+            if self.tool == "pen" and self.blur_brush_enabled:
                 status = (
-                    f"像素融色完成：實際融合 {blended_pixels} 個 pixel"
-                    if blended_pixels
-                    else "像素融色未命中鄰色：請靠近既有顏色繪製，或開啟透明淡邊"
+                    f"模糊筆刷完成：實際柔化 {blurred_pixels} 個 pixel"
+                    if blurred_pixels
+                    else "模糊筆刷未產生可見差異"
                 )
                 self._finish_edit(status)
             else:
@@ -719,10 +722,9 @@ class CanvasWidget(QWidget):
             return
         if (
             self.tool == "pen"
-            and self.pixel_blend_enabled
-            and self.color.alpha() > 0
+            and self.blur_brush_enabled
         ):
-            self._draw_pixel_blend_line(start, end)
+            self._draw_blur_brush_line(start, end)
             return
         image = self.frame.active_layer.image
         painter = QPainter(image)
@@ -743,41 +745,33 @@ class CanvasWidget(QWidget):
         if (
             not self.frame
             or self.tool != "pen"
-            or not self.pixel_blend_enabled
-            or self.color.alpha() <= 0
+            or not self.blur_brush_enabled
         ):
             return
         self._brush_base_layer_array = qimage_to_array(self.frame.active_layer.image)
-        if self.pixel_blend_sample_visible_layers:
-            self._brush_source_array = qimage_to_array(self.frame.composite())
-            self._brush_fallback_source_array = None
-        else:
-            self._brush_source_array = self._brush_base_layer_array
-            self._brush_fallback_source_array = (
-                qimage_to_array(self.frame.composite()) if len(self.frame.layers) > 1 else None
-            )
         shape = (self.frame.height, self.frame.width)
-        self._brush_stroke_mask = np.zeros(shape, dtype=bool)
-        self._brush_edge_factor = np.zeros(shape, dtype=np.float32)
-        self._brush_blended_mask = np.zeros(shape, dtype=bool)
+        self._brush_stroke_factor = np.zeros(shape, dtype=np.float32)
+        self._brush_changed_mask = np.zeros(shape, dtype=bool)
+        selection = self.selection_mask_image()
+        self._brush_selection_mask = (
+            qimage_to_array(selection)[:, :, 3] > 0 if selection is not None else None
+        )
 
     def _clear_brush_stroke_state(self) -> None:
-        self._brush_source_array = None
-        self._brush_fallback_source_array = None
         self._brush_base_layer_array = None
-        self._brush_stroke_mask = None
-        self._brush_edge_factor = None
-        self._brush_blended_mask = None
+        self._brush_stroke_factor = None
+        self._brush_changed_mask = None
+        self._brush_selection_mask = None
 
-    def _brush_blended_pixel_count(self) -> int:
+    def _brush_changed_pixel_count(self) -> int:
         return (
-            int(np.count_nonzero(self._brush_blended_mask))
-            if self._brush_blended_mask is not None
+            int(np.count_nonzero(self._brush_changed_mask))
+            if self._brush_changed_mask is not None
             else 0
         )
 
     def _expand_brush_stroke_state(self, dx: int, dy: int) -> None:
-        if self.frame is None or self._brush_source_array is None:
+        if self.frame is None or self._brush_base_layer_array is None:
             return
         new_height = self.frame.height
         new_width = self.frame.width
@@ -789,18 +783,11 @@ class CanvasWidget(QWidget):
             expanded[dy : dy + old_height, dx : dx + old_width] = array
             return expanded
 
-        shared_layer_source = self._brush_source_array is self._brush_base_layer_array
         self._brush_base_layer_array = expand_array(self._brush_base_layer_array)
-        self._brush_source_array = (
-            self._brush_base_layer_array
-            if shared_layer_source
-            else expand_array(self._brush_source_array)
-        )
-        if self._brush_fallback_source_array is not None:
-            self._brush_fallback_source_array = expand_array(self._brush_fallback_source_array)
-        self._brush_stroke_mask = expand_array(self._brush_stroke_mask)
-        self._brush_edge_factor = expand_array(self._brush_edge_factor)
-        self._brush_blended_mask = expand_array(self._brush_blended_mask)
+        self._brush_stroke_factor = expand_array(self._brush_stroke_factor)
+        self._brush_changed_mask = expand_array(self._brush_changed_mask)
+        if self._brush_selection_mask is not None:
+            self._brush_selection_mask = expand_array(self._brush_selection_mask)
 
     @staticmethod
     def _qimage_array_view(image: QImage) -> np.ndarray:
@@ -811,17 +798,15 @@ class CanvasWidget(QWidget):
             strides=(image.bytesPerLine(), 4, 1),
         )
 
-    def _draw_pixel_blend_line(self, start: QPoint, end: QPoint) -> None:
+    def _draw_blur_brush_line(self, start: QPoint, end: QPoint) -> None:
         if not self.frame:
             return
-        if self._brush_source_array is None:
+        if self._brush_base_layer_array is None:
             self._begin_brush_stroke()
         if (
-            self._brush_source_array is None
-            or self._brush_base_layer_array is None
-            or self._brush_stroke_mask is None
-            or self._brush_edge_factor is None
-            or self._brush_blended_mask is None
+            self._brush_base_layer_array is None
+            or self._brush_stroke_factor is None
+            or self._brush_changed_mask is None
         ):
             return
 
@@ -856,154 +841,59 @@ class CanvasWidget(QWidget):
         if not np.any(segment_mask):
             return
 
-        if self.brush_size <= self.pixel_blend_edge_width * 2:
-            segment_factor = np.ones_like(distance, dtype=np.float32)
+        hardness = max(0.0, min(1.0, float(self.blur_brush_hardness)))
+        inner_radius = radius * hardness
+        if inner_radius >= radius - 1e-6:
+            segment_factor = segment_mask.astype(np.float32)
         else:
-            core_radius = max(0.0, radius - float(self.pixel_blend_edge_width))
-            segment_factor = np.clip(
-                (distance - core_radius) / max(0.5, radius - core_radius),
+            transition = np.clip(
+                (distance - inner_radius) / max(0.5, radius - inner_radius),
                 0.0,
                 1.0,
-            ).astype(np.float32)
-
-        stroke_patch = self._brush_stroke_mask[y0:y1, x0:x1]
-        factor_patch = self._brush_edge_factor[y0:y1, x0:x1]
-        already_stroked = stroke_patch.copy()
-        stroke_patch |= segment_mask
-        factor_patch[segment_mask & ~already_stroked] = segment_factor[segment_mask & ~already_stroked]
-        factor_patch[segment_mask & already_stroked] = np.minimum(
-            factor_patch[segment_mask & already_stroked],
-            segment_factor[segment_mask & already_stroked],
-        )
-
-        target_rgba = np.empty((y1 - y0, x1 - x0, 4), dtype=np.float32)
-        brush_rgba = np.array(qcolor_to_rgba(self.color), dtype=np.float32)
-        target_rgba[:, :, :] = brush_rgba
-        strength = max(0.0, min(1.0, float(self.pixel_blend_strength)))
-        blend_amount = np.clip(factor_patch * strength, 0.0, 1.0)
-        nearby_rgb, has_visible_color, transparent_fraction = self._pixel_blend_neighbor_patch(
-            x0,
-            y0,
-            x1,
-            y1,
-        )
-        effective_blend = np.where(has_visible_color, blend_amount, 0.0)
-        target_rgba[:, :, :3] = (
-            brush_rgba[:3] * (1.0 - effective_blend[:, :, None])
-            + nearby_rgb * effective_blend[:, :, None]
-        )
-        if self.pixel_blend_include_transparent:
-            target_rgba[:, :, 3] = brush_rgba[3] * (
-                1.0 - blend_amount * transparent_fraction
             )
-        affected = stroke_patch
-        changed_from_solid_brush = (
-            np.max(np.abs(target_rgba[:, :, :3] - brush_rgba[:3]), axis=2) >= 0.5
-        ) | (np.abs(target_rgba[:, :, 3] - brush_rgba[3]) >= 0.5)
-        blended_patch = self._brush_blended_mask[y0:y1, x0:x1]
-        blended_patch[affected] = changed_from_solid_brush[affected]
+            segment_factor = (1.0 - transition * transition * (3.0 - 2.0 * transition)).astype(
+                np.float32
+            )
+            segment_factor[~segment_mask] = 0.0
 
-        base = self._brush_base_layer_array[y0:y1, x0:x1][affected].astype(np.float32)
-        source = target_rgba[affected]
-        source_alpha = source[:, 3:4] / 255.0
-        base_alpha = base[:, 3:4] / 255.0
-        output_alpha = source_alpha + base_alpha * (1.0 - source_alpha)
-        premultiplied_rgb = (
-            source[:, :3] * source_alpha
-            + base[:, :3] * base_alpha * (1.0 - source_alpha)
+        factor_patch = self._brush_stroke_factor[y0:y1, x0:x1]
+        np.maximum(factor_patch, segment_factor, out=factor_patch)
+        affected = factor_patch > 0.0
+        if self._brush_selection_mask is not None:
+            affected &= self._brush_selection_mask[y0:y1, x0:x1]
+        if not np.any(affected):
+            return
+
+        strength = max(0.0, min(1.0, float(self.blur_brush_strength)))
+        blend_amount = np.clip(factor_patch * strength, 0.0, 1.0)[:, :, None]
+        base_patch = self._brush_base_layer_array[y0:y1, x0:x1].astype(np.float32)
+        blur_radius = max(1, int(self.blur_brush_radius))
+        sample_x0 = max(0, x0 - blur_radius)
+        sample_y0 = max(0, y0 - blur_radius)
+        sample_x1 = min(width, x1 + blur_radius)
+        sample_y1 = min(height, y1 + blur_radius)
+        blurred_sample = alpha_aware_gaussian_blur(
+            self._brush_base_layer_array[sample_y0:sample_y1, sample_x0:sample_x1],
+            blur_radius,
+            self.blur_brush_preserve_alpha,
         )
-        output_rgb = np.divide(
-            premultiplied_rgb,
-            output_alpha,
-            out=np.zeros_like(premultiplied_rgb),
-            where=output_alpha > 0.0,
-        )
-        output = np.concatenate((output_rgb, output_alpha * 255.0), axis=1)
+        crop_x0 = x0 - sample_x0
+        crop_y0 = y0 - sample_y0
+        blurred_patch = blurred_sample[
+            crop_y0 : crop_y0 + (y1 - y0),
+            crop_x0 : crop_x0 + (x1 - x0),
+        ]
+        output = base_patch * (1.0 - blend_amount) + blurred_patch * blend_amount
+        output_u8 = np.clip(np.rint(output), 0, 255).astype(np.uint8)
+        changed = np.any(output_u8 != self._brush_base_layer_array[y0:y1, x0:x1], axis=2)
+        changed_patch = self._brush_changed_mask[y0:y1, x0:x1]
+        changed_patch[affected] = changed[affected]
 
         image_array = self._qimage_array_view(self.frame.active_layer.image)
         image_patch = image_array[y0:y1, x0:x1]
-        image_patch[affected] = np.clip(np.rint(output), 0, 255).astype(np.uint8)
+        image_patch[affected] = output_u8[affected]
         self.frame.mark_dirty()
         self.update()
-
-    def _pixel_blend_neighbor_patch(
-        self,
-        x0: int,
-        y0: int,
-        x1: int,
-        y1: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        if self._brush_source_array is None or self._brush_stroke_mask is None:
-            shape = (max(0, y1 - y0), max(0, x1 - x0))
-            return (
-                np.zeros(shape + (3,), dtype=np.float32),
-                np.zeros(shape, dtype=bool),
-                np.zeros(shape, dtype=np.float32),
-            )
-        radius = max(1, int(self.pixel_blend_sample_radius))
-        height, width = self._brush_stroke_mask.shape
-        sample_x0 = max(0, x0 - radius)
-        sample_y0 = max(0, y0 - radius)
-        sample_x1 = min(width, x1 + radius)
-        sample_y1 = min(height, y1 + radius)
-        available = (~self._brush_stroke_mask[sample_y0:sample_y1, sample_x0:sample_x1]).astype(
-            np.float32
-        )
-        kernel = radius * 2 + 1
-        sigma = max(0.5, radius / 2.0)
-
-        def blur(values: np.ndarray) -> np.ndarray:
-            return cv2.GaussianBlur(
-                values.astype(np.float32),
-                (kernel, kernel),
-                sigmaX=sigma,
-                sigmaY=sigma,
-                borderType=cv2.BORDER_CONSTANT,
-            )
-
-        def sample_source(source_array: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-            source = source_array[sample_y0:sample_y1, sample_x0:sample_x1]
-            alpha = source[:, :, 3].astype(np.float32) / 255.0
-            visible_weight = alpha * available
-            visible_sum = blur(visible_weight)
-            weighted_rgb = blur(source[:, :, :3].astype(np.float32) * visible_weight[:, :, None])
-            nearby_rgb = np.divide(
-                weighted_rgb,
-                visible_sum[:, :, None],
-                out=np.zeros_like(weighted_rgb),
-                where=visible_sum[:, :, None] > 1e-6,
-            )
-            available_sum = blur(available)
-            transparent_sum = blur((alpha <= 0.0).astype(np.float32) * available)
-            transparent_fraction = np.divide(
-                transparent_sum,
-                available_sum,
-                out=np.zeros_like(transparent_sum),
-                where=available_sum > 1e-6,
-            )
-            return nearby_rgb, visible_sum > 1e-6, transparent_fraction
-
-        nearby_rgb, has_visible_color, transparent_fraction = sample_source(
-            self._brush_source_array
-        )
-        if self._brush_fallback_source_array is not None:
-            fallback_rgb, fallback_visible, fallback_transparent = sample_source(
-                self._brush_fallback_source_array
-            )
-            use_fallback = ~has_visible_color & fallback_visible
-            nearby_rgb[use_fallback] = fallback_rgb[use_fallback]
-            transparent_fraction[use_fallback] = fallback_transparent[use_fallback]
-            has_visible_color |= fallback_visible
-
-        crop_y0 = y0 - sample_y0
-        crop_x0 = x0 - sample_x0
-        crop_y1 = crop_y0 + (y1 - y0)
-        crop_x1 = crop_x0 + (x1 - x0)
-        return (
-            nearby_rgb[crop_y0:crop_y1, crop_x0:crop_x1],
-            has_visible_color[crop_y0:crop_y1, crop_x0:crop_x1],
-            transparent_fraction[crop_y0:crop_y1, crop_x0:crop_x1],
-        )
 
     def _fill_lasso_selection(self, image: QImage) -> None:
         painter = QPainter(image)
@@ -1355,11 +1245,11 @@ class CanvasWidget(QWidget):
         painter.drawEllipse(center, radius, radius)
         painter.setPen(QPen(QColor(0, 0, 0), 1, Qt.PenStyle.DashLine))
         painter.drawEllipse(center, radius, radius)
-        if self.tool == "pen" and self.pixel_blend_enabled:
-            core_radius = (self.brush_size / 2.0 - self.pixel_blend_edge_width) * self.zoom
-            if core_radius > 0.5:
+        if self.tool == "pen" and self.blur_brush_enabled:
+            hard_radius = self.brush_size * self.blur_brush_hardness * self.zoom / 2.0
+            if hard_radius > 0.5:
                 painter.setPen(QPen(QColor(0, 220, 255), 1, Qt.PenStyle.DashLine))
-                painter.drawEllipse(center, core_radius, core_radius)
+                painter.drawEllipse(center, hard_radius, hard_radius)
         painter.restore()
 
     def _selection_to_image(self, frame: Optional[Frame] = None, bounds: Optional[QRect] = None) -> Optional[QImage]:

@@ -8,15 +8,23 @@ SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor bu
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.4.2-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.4.3-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.4.2.exe
+SpriteMakerPySide-2.4.3.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 2.4.3
+
+- Replaces the former Pixel Blend Pen with a conventional **Blur Brush** that softens existing image detail instead of painting the current foreground color into stroke edges.
+- Adds configurable blur strength, Gaussian radius, brush hardness, and optional alpha preservation.
+- Uses alpha-aware premultiplied sampling so hidden RGB in transparent pixels does not contaminate visible sprite edges.
+- Each mouse-down uses one stable source snapshot and the maximum accumulated brush coverage. Repeatedly crossing the same position in one stroke does not recursively blur an already blurred result.
+- Rectangular and lasso selections constrain changed pixels. The tool continues to affect only the active layer of the current frame and creates one undo/redo entry per stroke.
 
 ## What's New In 2.4.2
 
@@ -261,17 +269,16 @@ Drawing, fill, erase, selection deletion, and color erase operations affect the 
 - **Tolerance**: controls fill, magic wand, single-frame color erase, and global color erase tolerance.
 - `Alt+click` on the canvas: sample the visible pixel color into the toolbar color.
 
-### Pixel Blend Pen
+### Blur Brush
 
-Enable **Pixel Blend** to blend only the outer pixels of pen strokes with nearby colors:
+Enable **Blur Brush** to soften existing pixels under the pen cursor without painting the current foreground color:
 
-- **Strength** (`0-100%`): how strongly edge pixels move toward sampled neighboring colors.
-- **Edge** (`1-8 px`): width of the blended outer stroke band.
-- **Sample** (`1-16 px`): nearby color sampling radius.
-- **Active Layer / All Visible Layers**: choose whether sampling reads only the active layer or the visible composite. All visible layers is the default; active-layer mode automatically falls back to the visible composite only where the active layer has no usable neighboring color.
-- **Fade To Transparent**: allow transparent neighboring pixels to reduce edge alpha. It is disabled by default, so transparent pixels do not change stroke alpha.
+- **Strength** (`0-100%`): blend ratio between the original image and the blurred result.
+- **Radius** (`1-32 px`): Gaussian sampling radius. Larger values soften broader image detail.
+- **Hardness** (`0-100%`): size of the fully affected brush center. Lower values create a wider feathered edge.
+- **Preserve Alpha**: keeps every pixel's original transparency and modifies only RGB. This is enabled by default.
 
-The defaults are 75% strength, a 2 px edge, and a 5 px sample radius. The stroke core always uses the current pen color. Each mouse-down starts from a stable image snapshot, so a stroke never repeatedly samples its own newly painted pixels. After mouse release, the status bar reports the number of pixels that actually differed from a normal solid pen stroke. This mode affects only the pen; eraser, fill, and edge-spill cleanup behavior are unchanged.
+The defaults are 50% strength, a 4 px radius, 50% hardness, and Preserve Alpha enabled. Alpha-aware premultiplied sampling prevents invisible colors in transparent pixels from bleeding into visible edges. Each mouse-down captures a stable active-layer snapshot, so repeatedly crossing the same position in one stroke does not recursively blur the result. A rectangular or lasso selection limits changed pixels; without a selection, the circular brush can affect any pixel it crosses. Each completed stroke creates one undo/redo history entry and reports its changed-pixel count in the status bar. Eraser, fill, other layers, other frames, and edge-spill cleanup are unchanged.
 
 ### Pixel Compression
 

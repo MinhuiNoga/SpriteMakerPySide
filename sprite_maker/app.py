@@ -361,62 +361,52 @@ class MainWindow(QMainWindow):
         settings_toolbar.addWidget(self.checker_bg_toggle)
 
         self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
-        blend_toolbar = self.make_toolbar("像素融色畫筆", Qt.ToolBarArea.TopToolBarArea)
-        self.pixel_blend_toggle = QCheckBox("像素融色")
-        self.pixel_blend_toggle.setToolTip("只影響畫筆；讓筆畫邊緣融合附近既有像素顏色")
-        blend_toolbar.addWidget(self.pixel_blend_toggle)
+        blur_toolbar = self.make_toolbar("模糊筆刷", Qt.ToolBarArea.TopToolBarArea)
+        self.blur_brush_toggle = QCheckBox("模糊筆刷")
+        self.blur_brush_toggle.setToolTip("只影響目前圖層；以局部高斯模糊柔化筆刷經過的區域")
+        blur_toolbar.addWidget(self.blur_brush_toggle)
 
-        blend_toolbar.addWidget(QLabel("強度"))
-        self.pixel_blend_strength_spin = QSpinBox()
-        self.pixel_blend_strength_spin.setRange(0, 100)
-        self.pixel_blend_strength_spin.setValue(75)
-        self.pixel_blend_strength_spin.setSuffix("%")
-        self.pixel_blend_strength_spin.setToolTip("邊緣採用附近顏色的比例")
-        blend_toolbar.addWidget(self.pixel_blend_strength_spin)
+        blur_toolbar.addWidget(QLabel("強度"))
+        self.blur_brush_strength_spin = QSpinBox()
+        self.blur_brush_strength_spin.setRange(0, 100)
+        self.blur_brush_strength_spin.setValue(50)
+        self.blur_brush_strength_spin.setSuffix("%")
+        self.blur_brush_strength_spin.setToolTip("原圖與模糊結果的混合比例")
+        blur_toolbar.addWidget(self.blur_brush_strength_spin)
 
-        blend_toolbar.addWidget(QLabel("邊緣"))
-        self.pixel_blend_edge_spin = QSpinBox()
-        self.pixel_blend_edge_spin.setRange(1, 8)
-        self.pixel_blend_edge_spin.setValue(2)
-        self.pixel_blend_edge_spin.setSuffix(" px")
-        self.pixel_blend_edge_spin.setToolTip("筆畫外圍參與融色的寬度")
-        blend_toolbar.addWidget(self.pixel_blend_edge_spin)
+        blur_toolbar.addWidget(QLabel("半徑"))
+        self.blur_brush_radius_spin = QSpinBox()
+        self.blur_brush_radius_spin.setRange(1, 32)
+        self.blur_brush_radius_spin.setValue(4)
+        self.blur_brush_radius_spin.setSuffix(" px")
+        self.blur_brush_radius_spin.setToolTip("高斯模糊的取樣半徑")
+        blur_toolbar.addWidget(self.blur_brush_radius_spin)
 
-        blend_toolbar.addWidget(QLabel("取樣"))
-        self.pixel_blend_radius_spin = QSpinBox()
-        self.pixel_blend_radius_spin.setRange(1, 16)
-        self.pixel_blend_radius_spin.setValue(5)
-        self.pixel_blend_radius_spin.setSuffix(" px")
-        self.pixel_blend_radius_spin.setToolTip("尋找附近既有顏色的半徑")
-        blend_toolbar.addWidget(self.pixel_blend_radius_spin)
+        blur_toolbar.addWidget(QLabel("硬度"))
+        self.blur_brush_hardness_spin = QSpinBox()
+        self.blur_brush_hardness_spin.setRange(0, 100)
+        self.blur_brush_hardness_spin.setValue(50)
+        self.blur_brush_hardness_spin.setSuffix("%")
+        self.blur_brush_hardness_spin.setToolTip("控制筆刷中心實心範圍與邊緣漸淡寬度")
+        blur_toolbar.addWidget(self.blur_brush_hardness_spin)
 
-        self.pixel_blend_source_combo = QComboBox()
-        self.pixel_blend_source_combo.addItem("目前圖層", "layer")
-        self.pixel_blend_source_combo.addItem("所有可見圖層", "visible")
-        self.pixel_blend_source_combo.setCurrentIndex(1)
-        self.pixel_blend_source_combo.setToolTip("決定融色時從哪裡讀取鄰近顏色")
-        blend_toolbar.addWidget(self.pixel_blend_source_combo)
+        self.blur_brush_preserve_alpha_toggle = QCheckBox("保持 Alpha")
+        self.blur_brush_preserve_alpha_toggle.setChecked(True)
+        self.blur_brush_preserve_alpha_toggle.setToolTip("保持每個像素原有透明度，只柔化 RGB 顏色")
+        blur_toolbar.addWidget(self.blur_brush_preserve_alpha_toggle)
 
-        self.pixel_blend_transparent_toggle = QCheckBox("透明淡邊")
-        self.pixel_blend_transparent_toggle.setToolTip(
-            "開啟後，透明鄰近像素會降低筆畫邊緣 Alpha；關閉時透明像素不參與融色"
-        )
-        blend_toolbar.addWidget(self.pixel_blend_transparent_toggle)
-
-        self.pixel_blend_setting_widgets = [
-            self.pixel_blend_strength_spin,
-            self.pixel_blend_edge_spin,
-            self.pixel_blend_radius_spin,
-            self.pixel_blend_source_combo,
-            self.pixel_blend_transparent_toggle,
+        self.blur_brush_setting_widgets = [
+            self.blur_brush_strength_spin,
+            self.blur_brush_radius_spin,
+            self.blur_brush_hardness_spin,
+            self.blur_brush_preserve_alpha_toggle,
         ]
-        self.pixel_blend_toggle.toggled.connect(self.update_pixel_blend_settings)
-        self.pixel_blend_strength_spin.valueChanged.connect(self.update_pixel_blend_settings)
-        self.pixel_blend_edge_spin.valueChanged.connect(self.update_pixel_blend_settings)
-        self.pixel_blend_radius_spin.valueChanged.connect(self.update_pixel_blend_settings)
-        self.pixel_blend_source_combo.currentIndexChanged.connect(self.update_pixel_blend_settings)
-        self.pixel_blend_transparent_toggle.toggled.connect(self.update_pixel_blend_settings)
-        self.update_pixel_blend_settings()
+        self.blur_brush_toggle.toggled.connect(self.update_blur_brush_settings)
+        self.blur_brush_strength_spin.valueChanged.connect(self.update_blur_brush_settings)
+        self.blur_brush_radius_spin.valueChanged.connect(self.update_blur_brush_settings)
+        self.blur_brush_hardness_spin.valueChanged.connect(self.update_blur_brush_settings)
+        self.blur_brush_preserve_alpha_toggle.toggled.connect(self.update_blur_brush_settings)
+        self.update_blur_brush_settings()
 
         edit_toolbar = self.make_toolbar("編輯與影格", Qt.ToolBarArea.TopToolBarArea)
         self.add_action(edit_toolbar, "復原", self.undo, "Ctrl+Z")
@@ -1139,25 +1129,22 @@ class MainWindow(QMainWindow):
         self.canvas.update()
         self.status.showMessage("變形品質：平滑" if smooth else "變形品質：像素銳利")
 
-    def update_pixel_blend_settings(self) -> None:
-        enabled = self.pixel_blend_toggle.isChecked()
-        self.canvas.pixel_blend_enabled = enabled
-        self.canvas.pixel_blend_strength = self.pixel_blend_strength_spin.value() / 100.0
-        self.canvas.pixel_blend_edge_width = self.pixel_blend_edge_spin.value()
-        self.canvas.pixel_blend_sample_radius = self.pixel_blend_radius_spin.value()
-        self.canvas.pixel_blend_sample_visible_layers = (
-            self.pixel_blend_source_combo.currentData() == "visible"
-        )
-        self.canvas.pixel_blend_include_transparent = self.pixel_blend_transparent_toggle.isChecked()
-        for widget in self.pixel_blend_setting_widgets:
+    def update_blur_brush_settings(self) -> None:
+        enabled = self.blur_brush_toggle.isChecked()
+        self.canvas.blur_brush_enabled = enabled
+        self.canvas.blur_brush_strength = self.blur_brush_strength_spin.value() / 100.0
+        self.canvas.blur_brush_radius = self.blur_brush_radius_spin.value()
+        self.canvas.blur_brush_hardness = self.blur_brush_hardness_spin.value() / 100.0
+        self.canvas.blur_brush_preserve_alpha = self.blur_brush_preserve_alpha_toggle.isChecked()
+        for widget in self.blur_brush_setting_widgets:
             widget.setEnabled(enabled)
         self.canvas.update()
         if enabled:
             self.status.showMessage(
-                "像素融色畫筆："
-                f"強度 {self.pixel_blend_strength_spin.value()}%、"
-                f"邊緣 {self.pixel_blend_edge_spin.value()}px、"
-                f"取樣 {self.pixel_blend_radius_spin.value()}px"
+                "模糊筆刷："
+                f"強度 {self.blur_brush_strength_spin.value()}%、"
+                f"半徑 {self.blur_brush_radius_spin.value()}px、"
+                f"硬度 {self.blur_brush_hardness_spin.value()}%"
             )
 
     def set_tolerance(self, value: int) -> None:

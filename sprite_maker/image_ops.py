@@ -31,6 +31,45 @@ def qcolor_to_rgba(color: QColor) -> Tuple[int, int, int, int]:
     return color.red(), color.green(), color.blue(), color.alpha()
 
 
+def alpha_aware_gaussian_blur(
+    image_data: np.ndarray,
+    radius: int,
+    preserve_alpha: bool = True,
+) -> np.ndarray:
+    """Blur RGBA pixels without allowing hidden transparent RGB to bleed in."""
+    source = image_data.astype(np.float32)
+    radius = max(1, int(radius))
+    kernel_size = radius * 2 + 1
+    sigma = max(0.5, radius / 2.0)
+
+    def blur(values: np.ndarray) -> np.ndarray:
+        return cv2.GaussianBlur(
+            values,
+            (kernel_size, kernel_size),
+            sigmaX=sigma,
+            sigmaY=sigma,
+            borderType=cv2.BORDER_REFLECT_101,
+        )
+
+    alpha = source[:, :, 3] / 255.0
+    blurred_alpha = np.clip(blur(alpha), 0.0, 1.0)
+    blurred_premultiplied = blur(source[:, :, :3] * alpha[:, :, None])
+    blurred_rgb = np.divide(
+        blurred_premultiplied,
+        blurred_alpha[:, :, None],
+        out=np.zeros_like(blurred_premultiplied),
+        where=blurred_alpha[:, :, None] > 1e-6,
+    )
+
+    output = np.empty_like(source)
+    output[:, :, :3] = blurred_rgb
+    output[:, :, 3] = source[:, :, 3] if preserve_alpha else blurred_alpha * 255.0
+    if preserve_alpha:
+        transparent = source[:, :, 3] <= 0.0
+        output[transparent, :3] = source[transparent, :3]
+    return np.clip(output, 0.0, 255.0)
+
+
 def color_distance_mask(arr: np.ndarray, rgba: Iterable[int], tolerance: int) -> np.ndarray:
     target = np.array(tuple(rgba), dtype=np.int32)
     rgb_delta = arr[:, :, :3].astype(np.int32) - target[:3]
