@@ -45,6 +45,7 @@ from .models import Frame, Layer, clone_image, frame_from_image, frame_from_qima
 from .pixel_compression_dialog import PixelCompressionDialog
 from .startup_dialog import StartupDialog
 from .video_import_dialog import VideoImportDialog
+from .video_ops import is_animated_gif
 from .widgets import CanvasWidget, FrameStripWidget
 from .workers import UniversalEraseWorker
 
@@ -77,6 +78,7 @@ IMAGE_EXTENSION_ORDER = (
 IMAGE_EXTENSIONS = frozenset(IMAGE_EXTENSION_ORDER)
 IMAGE_FILE_FILTER = "支援的圖片 (" + " ".join(f"*{extension}" for extension in IMAGE_EXTENSION_ORDER) + ")"
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv"}
+ANIMATION_EXTENSIONS = VIDEO_EXTENSIONS | {".gif"}
 
 
 def natural_sort_key(path: Path) -> List[object]:
@@ -288,7 +290,7 @@ class MainWindow(QMainWindow):
         self.add_menu_action(file_menu, "匯入", self.import_images, "Ctrl+O")
         self.add_menu_action(file_menu, "插入", self.insert_images, "Ctrl+I")
         self.add_menu_action(file_menu, "清空", self.clear_project)
-        self.add_menu_action(file_menu, "匯入影片", self.import_video)
+        self.add_menu_action(file_menu, "匯入影片 / GIF", self.import_video)
         file_menu.addSeparator()
         self.add_menu_action(file_menu, "儲存單幀", self.export_current_frame, "Ctrl+S")
         self.add_menu_action(file_menu, "儲存ZIP", self.export_zip)
@@ -702,13 +704,22 @@ class MainWindow(QMainWindow):
             if not url.isLocalFile():
                 continue
             path = Path(url.toLocalFile())
-            if path.suffix.lower() in IMAGE_EXTENSIONS | VIDEO_EXTENSIONS:
+            if path.suffix.lower() in IMAGE_EXTENSIONS | ANIMATION_EXTENSIONS:
                 paths.append(path)
         return paths
 
     def handle_dropped_files(self, paths: List[Path]) -> None:
-        image_paths = [path for path in paths if path.suffix.lower() in IMAGE_EXTENSIONS]
-        video_paths = [path for path in paths if path.suffix.lower() in VIDEO_EXTENSIONS]
+        animated_gif_paths = {path for path in paths if is_animated_gif(path)}
+        image_paths = [
+            path
+            for path in paths
+            if path.suffix.lower() in IMAGE_EXTENSIONS and path not in animated_gif_paths
+        ]
+        video_paths = [
+            path
+            for path in paths
+            if path.suffix.lower() in VIDEO_EXTENSIONS or path in animated_gif_paths
+        ]
         if image_paths:
             self.append_image_frames(image_paths)
         for video_path in video_paths:
@@ -776,8 +787,8 @@ class MainWindow(QMainWindow):
     def confirm_video_import_switch(self) -> bool:
         answer = QMessageBox.warning(
             self,
-            "切換到匯入影片",
-            "切換後會關閉目前編輯模式，並初始化所有 frame、圖層與復原/重做紀錄。\n"
+            "切換到匯入影片 / GIF",
+            "切換後會關閉目前編輯模式，進入影片 / GIF 匯入流程，並初始化所有 frame、圖層與復原/重做紀錄。\n"
             "尚未儲存的編輯內容將會遺失。是否繼續？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,

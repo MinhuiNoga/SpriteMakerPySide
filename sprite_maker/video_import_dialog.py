@@ -30,10 +30,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .video_ops import ExtractedVideoFrame, VideoMetadata, cv_frame_to_qimage, extract_video_frames, read_video_metadata
+from .video_ops import (
+    ExtractedVideoFrame,
+    GifAnimation,
+    VideoMetadata,
+    cv_frame_to_qimage,
+    extract_video_frames,
+    gif_frame_index_at,
+    is_gif_path,
+    read_gif_animation,
+    read_video_metadata,
+)
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv"}
+ANIMATION_EXTENSIONS = VIDEO_EXTENSIONS | {".gif"}
 FRAME_THUMBNAIL_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
 
@@ -347,7 +358,7 @@ class VideoImportDialog(QDialog):
         initial_directory: Optional[Path] = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("匯入影片")
+        self.setWindowTitle("匯入影片 / GIF")
         self.setWindowFlags(
             self.windowFlags()
             | Qt.WindowType.WindowMinimizeButtonHint
@@ -363,6 +374,7 @@ class VideoImportDialog(QDialog):
         self.import_images: List[QImage] = []
         self.worker: Optional[VideoExtractWorker] = None
         self.preview_capture = None
+        self.gif_animation: Optional[GifAnimation] = None
         self.current_video_image: Optional[QImage] = None
         self.switch_to_editor = False
         self.initial_directory = initial_directory or Path.home()
@@ -469,7 +481,7 @@ class VideoImportDialog(QDialog):
             if not url.isLocalFile():
                 continue
             path = Path(url.toLocalFile())
-            if path.suffix.lower() in VIDEO_EXTENSIONS:
+            if path.suffix.lower() in ANIMATION_EXTENSIONS:
                 return path
         return None
 
@@ -490,15 +502,15 @@ class VideoImportDialog(QDialog):
 
     def _build_video_page(self) -> QWidget:
         page = QWidget()
-        self.path_label = QLabel("尚未選擇影片")
+        self.path_label = QLabel("尚未選擇影片 / GIF")
         self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        browse_button = QPushButton("選擇影片")
+        browse_button = QPushButton("選擇影片 / GIF")
         browse_button.clicked.connect(self.choose_video)
 
-        self.info_label = QLabel("選擇影片後會在這裡顯示資訊")
+        self.info_label = QLabel("選擇影片或 GIF 後會在這裡顯示資訊")
         self.info_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
-        self.video_preview = ZoomImageLabel("選擇影片後會自動循環播放選定時間段")
+        self.video_preview = ZoomImageLabel("選擇影片或 GIF 後會自動循環播放選定時間段")
         self.video_preview.setMinimumSize(720, 420)
         self.video_preview.setStyleSheet("background:#111827; color:#e5e7eb;")
 
@@ -583,7 +595,7 @@ class VideoImportDialog(QDialog):
         title.setStyleSheet("font-size: 18px; font-weight: 700;")
         self.quality_summary = QLabel("")
         self.quality_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        back_button = QPushButton("返回影片設定")
+        back_button = QPushButton("返回影片 / GIF 設定")
         back_button.clicked.connect(self.show_video_page)
 
         header = QHBoxLayout()
@@ -681,9 +693,9 @@ class VideoImportDialog(QDialog):
     def choose_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "選擇影片",
+            "選擇影片 / GIF",
             str(self.video_path.parent if self.video_path is not None else self.initial_directory),
-            "Videos (*.mp4 *.mov *.avi *.webm *.mkv);;All Files (*.*)",
+            "影片與 GIF (*.mp4 *.mov *.avi *.webm *.mkv *.gif);;影片 (*.mp4 *.mov *.avi *.webm *.mkv);;GIF 動畫 (*.gif);;All Files (*.*)",
         )
         if not path:
             return
@@ -691,10 +703,14 @@ class VideoImportDialog(QDialog):
 
     def load_video(self, path: Path) -> bool:
         try:
-            self.metadata = read_video_metadata(path)
+            gif_animation = read_gif_animation(path) if is_gif_path(path) else None
+            metadata = gif_animation.metadata if gif_animation is not None else read_video_metadata(path)
         except ValueError as exc:
-            QMessageBox.warning(self, "無法讀取影片", str(exc))
+            QMessageBox.warning(self, "無法讀取影片 / GIF", str(exc))
             return False
+        self.stop_video_preview()
+        self.gif_animation = gif_animation
+        self.metadata = metadata
         self.video_path = path
         self.initial_directory = path.parent
         self.path_label.setText(str(self.video_path))
@@ -708,9 +724,12 @@ class VideoImportDialog(QDialog):
         self.end_spin.setValue(duration)
         self._syncing_range = False
         self.fps_spin.setValue(12.0)
+        self.extraction_mode_combo.setCurrentIndex(0 if self.gif_animation is not None else 1)
+        self.extraction_mode_combo.setEnabled(self.gif_animation is None)
+        source_label = "GIF 動畫（依原始幀延遲）" if self.gif_animation is not None else "影片"
         self.info_label.setText(
-            f"{self.metadata.width} x {self.metadata.height} / "
-            f"{self.metadata.fps:.2f} FPS / {self.metadata.frame_count} frames / "
+            f"{source_label} / {self.metadata.width} x {self.metadata.height} / "
+            f"{'平均 ' if self.gif_animation is not None else ''}{self.metadata.fps:.2f} FPS / {self.metadata.frame_count} frames / "
             f"{self.metadata.duration:.3f} 秒"
         )
         self.start_video_preview()
@@ -719,6 +738,12 @@ class VideoImportDialog(QDialog):
     def start_video_preview(self) -> None:
         self.stop_video_preview()
         if self.video_path is None:
+            return
+        if self.gif_animation is not None:
+            self.seek_preview_to_start(immediate=True)
+            self.preview_playing = True
+            self.play_timer.start(self.gif_preview_interval_ms(self.range_slider.playhead_value))
+            self.update_video_play_button()
             return
         self.preview_capture = cv2.VideoCapture(str(self.video_path))
         if not self.preview_capture.isOpened():
@@ -743,9 +768,23 @@ class VideoImportDialog(QDialog):
             self.preview_capture = None
 
     def preview_interval_ms(self) -> int:
+        if self.gif_animation is not None:
+            return self.gif_preview_interval_ms(self.range_slider.playhead_value)
         if self.metadata and self.metadata.fps > 0:
             return max(15, min(100, round(1000 / self.metadata.fps)))
         return 33
+
+    def gif_preview_interval_ms(self, value: float) -> int:
+        if self.gif_animation is None or not self.gif_animation.frames:
+            return 100
+        index = gif_frame_index_at(self.gif_animation, value)
+        frame_end = self.gif_animation.frame_starts[index] + self.gif_animation.frame_durations[index]
+        next_time = min(frame_end, self.range_slider.end_value)
+        delay = max(0.01, next_time - value)
+        return max(10, min(60000, round(delay * 1000.0)))
+
+    def preview_source_ready(self) -> bool:
+        return self.gif_animation is not None or self.preview_capture is not None
 
     def begin_range_slider_drag(self) -> None:
         self._slider_dragging = True
@@ -760,7 +799,7 @@ class VideoImportDialog(QDialog):
         resume_playback = self._resume_video_after_slider_drag
         self._slider_dragging = False
         self._resume_video_after_slider_drag = False
-        if resume_playback and self.preview_capture is not None:
+        if resume_playback and self.preview_source_ready():
             self.play_timer.start(self.preview_interval_ms())
             self.preview_playing = True
         self.update_video_play_button()
@@ -785,7 +824,11 @@ class VideoImportDialog(QDialog):
         value = max(self.range_slider.start_value, min(float(value), self.range_slider.end_value))
         was_playing = self.preview_playing
         self.play_timer.stop()
-        if self.preview_capture is not None:
+        if self.gif_animation is not None:
+            index = gif_frame_index_at(self.gif_animation, value)
+            self.current_video_image = self.gif_animation.frames[index].copy()
+            self.show_video_image()
+        elif self.preview_capture is not None:
             self.preview_capture.set(cv2.CAP_PROP_POS_MSEC, value * 1000.0)
             ok, frame = self.preview_capture.read()
             if not ok or frame is None:
@@ -799,16 +842,13 @@ class VideoImportDialog(QDialog):
                 self.show_video_image()
                 self.preview_capture.set(cv2.CAP_PROP_POS_MSEC, value * 1000.0)
         self.range_slider.setPlayhead(value)
-        if was_playing and self.preview_capture is not None:
-            interval = 33
-            if self.metadata and self.metadata.fps > 0:
-                interval = max(15, min(100, round(1000 / self.metadata.fps)))
-            self.play_timer.start(interval)
+        if was_playing and self.preview_source_ready():
+            self.play_timer.start(self.preview_interval_ms())
 
     def toggle_video_playback(self) -> None:
         if self.video_path is None:
             return
-        if self.preview_capture is None:
+        if not self.preview_source_ready():
             self.start_video_preview()
             return
         if self.preview_playing:
@@ -830,6 +870,19 @@ class VideoImportDialog(QDialog):
             self.schedule_preview_seek(value)
 
     def advance_video_preview(self) -> None:
+        if self.gif_animation is not None:
+            current_time = self.range_slider.playhead_value
+            index = gif_frame_index_at(self.gif_animation, current_time)
+            next_time = self.gif_animation.frame_starts[index] + self.gif_animation.frame_durations[index]
+            if next_time >= self.range_slider.end_value - 0.0005:
+                next_time = self.range_slider.start_value
+            self.range_slider.setPlayhead(next_time)
+            next_index = gif_frame_index_at(self.gif_animation, next_time)
+            self.current_video_image = self.gif_animation.frames[next_index].copy()
+            self.show_video_image()
+            if self.preview_playing:
+                self.play_timer.start(self.gif_preview_interval_ms(next_time))
+            return
         if self.preview_capture is None:
             return
         current_time = float(self.preview_capture.get(cv2.CAP_PROP_POS_MSEC) or 0.0) / 1000.0
@@ -902,7 +955,7 @@ class VideoImportDialog(QDialog):
 
     def extract_preview(self) -> None:
         if self.video_path is None:
-            QMessageBox.information(self, "尚未選擇影片", "請先選擇影片檔。")
+            QMessageBox.information(self, "尚未選擇影片 / GIF", "請先選擇影片或 GIF 檔。")
             return
         start = self.start_spin.value()
         end = self.end_spin.value()
@@ -933,7 +986,10 @@ class VideoImportDialog(QDialog):
     def on_extract_finished(self, frames: list) -> None:
         self.frames = list(frames)
         blurry_count = sum(1 for frame in self.frames if frame.is_blurry)
-        self.quality_summary.setText(f"共 {len(self.frames)} frame｜低清晰度 {blurry_count}")
+        if self.gif_animation is not None:
+            self.quality_summary.setText(f"共 {len(self.frames)} frame｜GIF 精確時間取樣")
+        else:
+            self.quality_summary.setText(f"共 {len(self.frames)} frame｜低清晰度 {blurry_count}")
         self.progress.setRange(0, max(1, len(self.frames)))
         self.progress.setValue(len(self.frames))
         self.refresh_frame_list()
@@ -970,8 +1026,14 @@ class VideoImportDialog(QDialog):
             self.frame_list.addItem(item)
             self.update_frame_item_visual(item)
 
-    @staticmethod
-    def frame_quality_tooltip(index: int, frame: ExtractedVideoFrame) -> str:
+    def frame_quality_tooltip(self, index: int, frame: ExtractedVideoFrame) -> str:
+        if self.gif_animation is not None:
+            return (
+                f"Frame {index + 1}\n"
+                f"目標時間：{frame.target_timestamp:.3f}s\n"
+                f"GIF 來源時間：{frame.timestamp:.3f}s\n"
+                f"GIF 來源影格：#{frame.source_index}"
+            )
         quality = "低清晰度" if frame.is_blurry else "清晰度正常"
         return (
             f"Frame {index + 1}\n"
@@ -1095,12 +1157,13 @@ class VideoImportDialog(QDialog):
         self.animation_progress.setRange(0, max(0, len(selected) - 1))
         self.animation_progress.setValue(self.animation_index)
         self.animation_progress.blockSignals(False)
+        quality_text = "" if self.gif_animation is not None else (
+            f"sharpness={frame.sharpness:.1f}{'  LOW' if frame.is_blurry else ''}  "
+        )
         self.animation_info.setText(
             f"{self.animation_index + 1}/{len(selected)}  "
             f"time={frame.timestamp:.3f}s  source=#{frame.source_index}  "
-            f"sharpness={frame.sharpness:.1f}"
-            f"{'  LOW' if frame.is_blurry else ''}  "
-            f"speed={self.animation_fps_spin.value():.2f} FPS"
+            f"{quality_text}speed={self.animation_fps_spin.value():.2f} FPS"
         )
 
     def zoom_frame_list(self, delta: int) -> None:

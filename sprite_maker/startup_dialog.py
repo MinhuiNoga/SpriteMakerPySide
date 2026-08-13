@@ -21,7 +21,7 @@ class StartupDialog(QDialog):
         subtitle = QLabel("請選擇要開始的工作流程")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        video_button = QPushButton("匯入影片")
+        video_button = QPushButton("匯入影片 / GIF")
         video_button.setMinimumHeight(56)
         video_button.clicked.connect(self.choose_video)
 

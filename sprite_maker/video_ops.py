@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 
 import cv2
 import numpy as np
+from PIL import Image
 from PySide6.QtGui import QImage
 
 from .models import RGBA_FORMAT
@@ -19,6 +21,34 @@ class VideoMetadata:
     duration: float
     width: int
     height: int
+
+
+@dataclass
+class GifAnimation:
+    path: Path
+    frames: List[QImage]
+    frame_starts: List[float]
+    frame_durations: List[float]
+    loop_count: int
+
+    @property
+    def duration(self) -> float:
+        if not self.frame_starts or not self.frame_durations:
+            return 0.0
+        return self.frame_starts[-1] + self.frame_durations[-1]
+
+    @property
+    def metadata(self) -> VideoMetadata:
+        frame_count = len(self.frames)
+        duration = self.duration
+        return VideoMetadata(
+            path=self.path,
+            fps=frame_count / duration if duration > 0 else 0.0,
+            frame_count=frame_count,
+            duration=duration,
+            width=self.frames[0].width() if self.frames else 0,
+            height=self.frames[0].height() if self.frames else 0,
+        )
 
 
 @dataclass
@@ -44,7 +74,70 @@ class _DecodedCandidate:
     histogram: np.ndarray
 
 
+def is_gif_path(path: Path) -> bool:
+    return path.suffix.lower() == ".gif"
+
+
+def is_animated_gif(path: Path) -> bool:
+    if not is_gif_path(path):
+        return False
+    try:
+        with Image.open(path) as source:
+            return bool(getattr(source, "is_animated", False) and getattr(source, "n_frames", 1) > 1)
+    except Exception:
+        return False
+
+
+def _pil_rgba_to_qimage(image: Image.Image) -> QImage:
+    rgba = image.convert("RGBA")
+    data = rgba.tobytes()
+    return QImage(data, rgba.width, rgba.height, rgba.width * 4, RGBA_FORMAT).copy()
+
+
+def read_gif_animation(path: Path) -> GifAnimation:
+    if not is_gif_path(path):
+        raise ValueError(f"Not a GIF file: {path}")
+
+    frames: List[QImage] = []
+    frame_starts: List[float] = []
+    frame_durations: List[float] = []
+    elapsed = 0.0
+    try:
+        with Image.open(path) as source:
+            loop_count = int(source.info.get("loop", 0) or 0)
+            frame_count = max(1, int(getattr(source, "n_frames", 1) or 1))
+            for index in range(frame_count):
+                source.seek(index)
+                duration_ms = int(source.info.get("duration", 100) or 100)
+                duration = max(0.01, duration_ms / 1000.0)
+                frame_starts.append(elapsed)
+                frame_durations.append(duration)
+                frames.append(_pil_rgba_to_qimage(source))
+                elapsed += duration
+    except Exception as exc:
+        raise ValueError(f"Cannot open GIF: {path}") from exc
+
+    if not frames:
+        raise ValueError(f"GIF contains no readable frames: {path}")
+    return GifAnimation(
+        path=path,
+        frames=frames,
+        frame_starts=frame_starts,
+        frame_durations=frame_durations,
+        loop_count=loop_count,
+    )
+
+
+def gif_frame_index_at(animation: GifAnimation, timestamp: float) -> int:
+    if not animation.frames:
+        return 0
+    timestamp = max(0.0, min(float(timestamp), max(0.0, animation.duration - 1e-9)))
+    return max(0, min(len(animation.frames) - 1, bisect_right(animation.frame_starts, timestamp) - 1))
+
+
 def read_video_metadata(path: Path) -> VideoMetadata:
+    if is_gif_path(path):
+        return read_gif_animation(path).metadata
     capture = cv2.VideoCapture(str(path))
     if not capture.isOpened():
         raise ValueError(f"Cannot open video: {path}")
@@ -207,6 +300,14 @@ def extract_video_frames(
     mode: str = "balanced",
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> List[ExtractedVideoFrame]:
+    if is_gif_path(path):
+        return extract_gif_frames(
+            path,
+            start,
+            end,
+            target_fps,
+            progress_callback=progress_callback,
+        )
     mode = mode if mode in {"exact", "balanced", "sharp"} else "balanced"
     target_times = build_sample_times(start, end, target_fps)
     if not target_times:
@@ -336,4 +437,34 @@ def extract_video_frames(
         capture.release()
 
     _classify_extracted_frames(frames)
+    return frames
+
+
+def extract_gif_frames(
+    path: Path,
+    start: float,
+    end: float,
+    target_fps: float,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> List[ExtractedVideoFrame]:
+    animation = read_gif_animation(path)
+    start = max(0.0, min(float(start), animation.duration))
+    end = max(start, min(float(end), animation.duration))
+    target_times = build_sample_times(start, end, target_fps)
+    frames: List[ExtractedVideoFrame] = []
+    for target_index, target_timestamp in enumerate(target_times):
+        source_index = gif_frame_index_at(animation, target_timestamp)
+        source_timestamp = animation.frame_starts[source_index]
+        frames.append(
+            ExtractedVideoFrame(
+                image=animation.frames[source_index].copy(),
+                timestamp=source_timestamp,
+                source_index=source_index,
+                target_timestamp=target_timestamp,
+                time_offset=source_timestamp - target_timestamp,
+                extraction_mode="exact",
+            )
+        )
+        if progress_callback is not None:
+            progress_callback(target_index + 1, len(target_times))
     return frames

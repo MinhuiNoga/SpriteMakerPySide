@@ -2,21 +2,30 @@
 
 [繁體中文 README](README.zh-TW.md)
 
-SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor built with Python, PySide6, OpenCV, NumPy, and Pillow. It replaces a large single-file HTML workflow with a native app for drawing, layer editing, frame sequencing, video frame extraction, alpha/color cleanup, selected-color edge spill cleanup, animation preview, and spritesheet export.
+SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor built with Python, PySide6, OpenCV, NumPy, and Pillow. It replaces a large single-file HTML workflow with a native app for drawing, layer editing, frame sequencing, video/GIF frame extraction, alpha/color cleanup, selected-color edge spill cleanup, animation preview, and spritesheet export.
 
 ## Download
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.4.3-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.5.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.4.3.exe
+SpriteMakerPySide-2.5.0.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 2.5.0
+
+- Adds animated GIF support to the **Video / GIF Import** workflow through the startup choice, file picker, and drag-and-drop.
+- Plays GIF previews with their authored per-frame delays and preserves transparency while looping only the selected start/end range.
+- Builds a cumulative timeline for variable-duration GIF frames, so playhead seeking and start/end handles resolve to the correct source frame.
+- Resamples the selected GIF time range at the requested target FPS before opening the existing frame-picking page.
+- GIF extraction uses exact-time frame mapping rather than video sharp-frame substitution, preserving authored poses and intentional held frames.
+- Animated GIF files dropped into the editor open the animation importer; single-frame GIF files remain normal image imports.
 
 ## What's New In 2.4.3
 
@@ -31,7 +40,7 @@ The release package includes Python, PySide6, OpenCV, and required runtime files
 - Expands editor import and drag-and-drop beyond PNG/JPEG to common image formats.
 - Supports JPEG variants (`JPE`, `JFIF`, `JIF`, `JFI`), `BMP/DIB`, `GIF`, `WebP`, `TIFF`, `TGA`, `ICO/ICNS`, `PBM/PGM/PPM`, `XBM/XPM`, and `SVG/SVGZ`.
 - Uses Qt image decoding with automatic orientation and a Pillow fallback for broader compatibility.
-- Animated or multi-page image files import their first frame/page. Use the video importer for video frame extraction.
+- Animated or multi-page image files imported through the normal image command use their first frame/page. Use **Video / GIF Import** to preserve and extract an animated GIF timeline.
 - Multiple imported images retain natural filename sorting, such as `frame_2` before `frame_10`.
 
 ## What's New In 2.4.1
@@ -168,15 +177,15 @@ The release package includes Python, PySide6, OpenCV, and required runtime files
 
 When the app opens, choose one of two workflows:
 
-- **Import Video**: open the video frame extraction workflow first.
+- **Import Video / GIF**: open the video or animated-GIF frame extraction workflow first.
 - **Enter Editor Mode**: open the sprite editor directly.
 
-From the video workflow, use **Switch to Editor Mode** to close the video importer and enter an initialized editor. A confirmation warns that extracted frames are discarded; use **Import to Editor** when checked frames should be kept.
+From the video/GIF workflow, use **Switch to Editor Mode** to close the importer and enter an initialized editor. A confirmation warns that extracted frames are discarded; use **Import to Editor** when checked frames should be kept.
 
 ## Supported Files
 
-- Images: `.png`, `.jpg`, `.jpeg`, `.bmp`, `.webp`
-- Videos: `.mp4`, `.mov`, `.avi`, `.webm`, `.mkv`
+- Images: PNG, JPEG/JPG/JPE/JFIF/JIF/JFI, BMP/DIB, GIF, WebP, TIFF, TGA, ICO/ICNS, PBM/PGM/PPM, XBM/XPM, and SVG/SVGZ
+- Animation importer: `.mp4`, `.mov`, `.avi`, `.webm`, `.mkv`, animated `.gif`
 
 When importing multiple images, frames are ordered by filename with natural numeric sorting. For example:
 
@@ -195,7 +204,7 @@ The **File** toolbar menu contains:
 - **Import** (`Ctrl+O`): import image files as a new frame sequence. Existing frames are replaced.
 - **Insert** (`Ctrl+I`): insert images after the current frame.
 - **Clear**: clear the current project.
-- **Import Video**: switch from editor mode to the video importer. A warning explains that the current editor project and history will be initialized; the switch only proceeds after confirmation.
+- **Import Video / GIF**: switch from editor mode to the animation importer. A warning explains that the current editor project and history will be initialized; the switch only proceeds after confirmation.
 - **Save Current Frame** (`Ctrl+S`): export the current composited frame as PNG.
 - **Save ZIP**: export all frames in their current arranged order to a ZIP file, renamed sequentially as `video_frame_0001.png`, `video_frame_0002.png`, and so on.
 
@@ -204,10 +213,10 @@ Save dialogs for the current frame, frame ZIP, spritesheet, and extracted-video 
 You can also drag files into the editor:
 
 - Drag one or more images into the editor to append them to the end of the current frame sequence.
-- Drag a video into the editor to open it in the video importer.
-- Dragging videos into the video import window itself also loads that video.
+- Drag a video or animated GIF into the editor to open it in the animation importer. A single-frame GIF remains a normal image import.
+- Drag a video or GIF into the **Video / GIF Import** window itself to load it directly.
 
-Supported image imports include PNG, JPEG/JPG/JPE/JFIF/JIF/JFI, BMP/DIB, GIF, WebP, TIFF, TGA, ICO/ICNS, PBM/PGM/PPM, XBM/XPM, and SVG/SVGZ. Animated GIF and multi-page image files use the first frame/page.
+Supported image imports include PNG, JPEG/JPG/JPE/JFIF/JIF/JFI, BMP/DIB, GIF, WebP, TIFF, TGA, ICO/ICNS, PBM/PGM/PPM, XBM/XPM, and SVG/SVGZ. An animated GIF imported with the normal image command uses its first frame; use **Video / GIF Import** for its complete timeline.
 
 ### Frame Timeline
 
@@ -375,20 +384,20 @@ Selections support:
 
 Pasted content appears at the same coordinate where it was copied, even when pasted into another frame.
 
-## Video Import Workflow
+## Video / GIF Import Workflow
 
-The video importer supports choosing or dragging a video file.
+The animation importer supports choosing or dragging a video or GIF file.
 
-### Video Preview Page
+### Video / GIF Preview Page
 
-- The selected video loops inside the chosen start/end range.
+- The selected video or GIF loops inside the chosen start/end range. GIF transparency and individual frame delays are preserved.
 - Use the green and red handles to set start and end time.
 - Use the yellow playhead to scrub preview position.
 - Dragging time handles pauses playback and resumes after release to reduce preview lockups.
 - Use **Play/Pause** to control preview playback.
 - Use `Ctrl+wheel` over the preview to zoom.
 - Target FPS defaults to `12 FPS`.
-- Choose an extraction strategy: **Exact Time**, **Balanced** (default), or **Sharpness First**.
+- Videos support **Exact Time**, **Balanced** (default), and **Sharpness First** extraction. GIF files use exact-time mapping to retain their authored poses and held frames.
 - Click **Extract frame** to sequentially decode and select frames from the chosen time range.
 
 ### Frame Selection Page

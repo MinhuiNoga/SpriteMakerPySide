@@ -2,21 +2,30 @@
 
 [English README](README.md)
 
-SpriteMaker PySide 是一款以 Python + PySide6 製作的本地 Windows 桌面版 sprite 與 frame matting 編輯工具。它用桌面程式取代龐大的單檔 HTML 工作流程，支援繪圖、圖層編輯、影格序列、影片 frame 擷取、Alpha/顏色清理、指定色邊緣融色修復、動畫預覽與 spritesheet 輸出。
+SpriteMaker PySide 是一款以 Python + PySide6 製作的本地 Windows 桌面版 sprite 與 frame matting 編輯工具。它用桌面程式取代龐大的單檔 HTML 工作流程，支援繪圖、圖層編輯、影格序列、影片／GIF frame 擷取、Alpha/顏色清理、指定色邊緣融色修復、動畫預覽與 spritesheet 輸出。
 
 ## 下載
 
 Windows 使用者可以從 GitHub Releases 下載已打包版本：
 
-- [SpriteMakerPySide-2.4.3-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-2.5.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 解壓縮後執行：
 
 ```text
-SpriteMakerPySide-2.4.3.exe
+SpriteMakerPySide-2.5.0.exe
 ```
 
 Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者不需要另外安裝 Python。
+
+## 2.5.0 更新重點
+
+- 在啟動選擇、檔案選擇器與拖放流程中，為 **匯入影片 / GIF** 模式加入動態 GIF 支援。
+- GIF 預覽會依照原始檔每個 frame 的個別延遲播放，保留透明背景，並只在使用者指定的開始／結束區間內循環。
+- 依不等長的 frame 延遲建立累積時間軸，拖曳播放進度、開始點與結束點時會顯示正確的來源 frame。
+- 可依目標 FPS 重新取樣選定的 GIF 時間範圍，再進入既有的 frame 勾選頁面。
+- GIF 固定使用精確時間對應，不套用影片的清晰幀替換，避免動畫姿勢或刻意停留的 frame 被換掉。
+- 將動態 GIF 拖入編輯器時會開啟動畫匯入流程；單幀 GIF 則維持一般圖片匯入行為。
 
 ## 2.4.3 更新重點
 
@@ -31,7 +40,7 @@ Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者
 - 將編輯模式的匯入與拖放功能由 PNG／JPEG 擴充到普遍使用的其他圖片格式。
 - 支援 JPEG 延伸格式（`JPE`、`JFIF`、`JIF`、`JFI`）、`BMP/DIB`、`GIF`、`WebP`、`TIFF`、`TGA`、`ICO/ICNS`、`PBM/PGM/PPM`、`XBM/XPM` 與 `SVG/SVGZ`。
 - 使用 Qt 圖片解碼與自動方向校正，並加入 Pillow 後備載入，提高不同圖片來源的相容性。
-- 動態或多頁圖片會匯入第一個 frame／頁面；影片的逐幀擷取仍使用影片匯入功能。
+- 透過一般圖片指令匯入動態或多頁圖片時，仍使用第一個 frame／頁面；若要保留並擷取完整 GIF 時間軸，請使用 **匯入影片 / GIF**。
 - 複數圖片維持依檔名自然排序，例如 `frame_2` 會排在 `frame_10` 前面。
 
 ## 2.4.1 更新重點
@@ -168,15 +177,15 @@ Release 版本已包含 Python、PySide6、OpenCV 與必要執行檔，使用者
 
 程式啟動後可以選擇兩種流程：
 
-- **匯入影片**：先進入影片 frame 擷取流程。
+- **匯入影片 / GIF**：先進入影片或動態 GIF 的 frame 擷取流程。
 - **進入編輯模式**：直接進入 sprite 編輯器。
 
-在影片匯入流程中，可以按 **切換到編輯模式** 關閉影片匯入視窗並進入初始化的編輯器。程式會先警告擷取 frame 不會被帶入；要保留勾選 frame 時請使用 **匯入編輯器**。
+在影片／GIF 匯入流程中，可以按 **切換到編輯模式** 關閉匯入視窗並進入初始化的編輯器。程式會先警告擷取 frame 不會被帶入；要保留勾選 frame 時請使用 **匯入編輯器**。
 
 ## 支援檔案
 
-- 圖片：`.png`、`.jpg`、`.jpeg`、`.bmp`、`.webp`
-- 影片：`.mp4`、`.mov`、`.avi`、`.webm`、`.mkv`
+- 圖片：PNG、JPEG/JPG/JPE/JFIF/JIF/JFI、BMP/DIB、GIF、WebP、TIFF、TGA、ICO/ICNS、PBM/PGM/PPM、XBM/XPM、SVG/SVGZ
+- 動畫匯入器：`.mp4`、`.mov`、`.avi`、`.webm`、`.mkv`、動態 `.gif`
 
 複數圖片匯入時會依檔名自然排序，例如：
 
@@ -195,7 +204,7 @@ frame_10.png
 - **匯入** (`Ctrl+O`)：將圖片匯入為新的 frame 序列，會取代目前已有 frame。
 - **插入** (`Ctrl+I`)：將圖片插入目前 frame 後方。
 - **清空**：清空目前專案。
-- **匯入影片**：從編輯模式切換到影片匯入器。程式會先警告目前編輯專案與歷史將被初始化，只有確認後才會切換。
+- **匯入影片 / GIF**：從編輯模式切換到動畫匯入器。程式會先警告目前編輯專案與歷史將被初始化，只有確認後才會切換。
 - **儲存單幀** (`Ctrl+S`)：將目前合成 frame 匯出為 PNG。
 - **儲存 ZIP**：依目前排列順序將所有 frame 匯出成 ZIP，並重新命名為 `video_frame_0001.png`、`video_frame_0002.png`，依此類推。
 
@@ -204,10 +213,10 @@ frame_10.png
 也可以直接拖放檔案：
 
 - 將一張或多張圖片拖入編輯器，會追加到目前 frame 序列最後面。
-- 將影片拖入編輯器，會直接開啟影片匯入流程。
-- 將影片拖入「匯入影片」視窗本身，也會直接載入該影片。
+- 將影片或動態 GIF 拖入編輯器，會直接開啟動畫匯入流程；單幀 GIF 維持一般圖片匯入。
+- 將影片或 GIF 拖入 **匯入影片 / GIF** 視窗本身，也會直接載入。
 
-可匯入的圖片格式包含 PNG、JPEG/JPG/JPE/JFIF/JIF/JFI、BMP/DIB、GIF、WebP、TIFF、TGA、ICO/ICNS、PBM/PGM/PPM、XBM/XPM 與 SVG/SVGZ。動態 GIF 與多頁圖片會使用第一個 frame／頁面。
+可匯入的圖片格式包含 PNG、JPEG/JPG/JPE/JFIF/JIF/JFI、BMP/DIB、GIF、WebP、TIFF、TGA、ICO/ICNS、PBM/PGM/PPM、XBM/XPM 與 SVG/SVGZ。透過一般圖片指令匯入動態 GIF 時只使用第一個 frame；完整時間軸請使用 **匯入影片 / GIF**。
 
 ### 影格序列
 
@@ -375,20 +384,20 @@ Debug 控制：
 
 貼上到不同 frame 時，會貼到複製時的同座標位置。
 
-## 影片匯入流程
+## 影片 / GIF 匯入流程
 
-影片匯入器支援選擇影片或直接拖入影片。
+動畫匯入器支援選擇或直接拖入影片與 GIF。
 
-### 影片預覽頁
+### 影片 / GIF 預覽頁
 
-- 選取影片後會循環播放目前開始/結束時間範圍。
+- 選取影片或 GIF 後會循環播放目前開始／結束時間範圍；GIF 會保留透明背景與每個 frame 的個別延遲。
 - 使用綠色與紅色圓點設定開始與結束時間。
 - 使用黃色播放點調整目前預覽位置。
 - 拖曳時間點時會暫停播放，放開後恢復，降低卡死機率。
 - 可用 **播放/暫停** 控制預覽。
 - 在預覽畫面上使用 `Ctrl + 滾輪` 可縮放。
 - 目標 FPS 預設為 `12 FPS`。
-- 可選擇 **精確時間**、**平衡（推薦）** 或 **清晰優先** 擷取策略。
+- 影片可選擇 **精確時間**、**平衡（推薦）** 或 **清晰優先**；GIF 固定使用精確時間對應，以保留原本姿勢與停留 frame。
 - 按 **擷取 frame** 後，會連續解碼選定範圍並依目標 FPS 選擇影格。
 
 ### 選擇保留 frame 頁
