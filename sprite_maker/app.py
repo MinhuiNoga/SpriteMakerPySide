@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 from .image_ops import add_outline, applyColorSpillCleanupToImageData, erase_color, qcolor_to_rgba, trim_alpha_edges
 from .models import Frame, Layer, clone_image, frame_from_image, frame_from_qimage, make_blank_image
 from .pixel_compression_dialog import PixelCompressionDialog
+from .sprite_import_dialog import SpriteImportDialog
 from .startup_dialog import StartupDialog
 from .video_import_dialog import VideoImportDialog
 from .video_ops import is_animated_gif
@@ -291,6 +292,7 @@ class MainWindow(QMainWindow):
         self.add_menu_action(file_menu, "插入", self.insert_images, "Ctrl+I")
         self.add_menu_action(file_menu, "清空", self.clear_project)
         self.add_menu_action(file_menu, "匯入影片 / GIF", self.import_video)
+        self.add_menu_action(file_menu, "匯入 Sprite 圖", self.import_spritesheet)
         file_menu.addSeparator()
         self.add_menu_action(file_menu, "儲存單幀", self.export_current_frame, "Ctrl+S")
         self.add_menu_action(file_menu, "儲存ZIP", self.export_zip)
@@ -763,6 +765,53 @@ class MainWindow(QMainWindow):
             self.frames[insert_at:insert_at] = new_frames
             self.current_index = insert_at
         self.after_project_changed("已插入影格")
+
+    def import_spritesheet(self) -> None:
+        if not self.confirm_spritesheet_import_replace():
+            return
+        dialog = SpriteImportDialog(
+            self,
+            initial_directory=self.default_file_dialog_directory(),
+            image_filter=IMAGE_FILE_FILTER,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.import_images:
+            return
+        self.replace_with_sprite_frames(dialog.import_images, dialog.source_path)
+
+    def confirm_spritesheet_import_replace(self) -> bool:
+        if not self.frames:
+            return True
+        answer = QMessageBox.warning(
+            self,
+            "匯入 Sprite 圖",
+            "拆分並匯入後會清空目前所有 frame、圖層與復原/重做紀錄。\n"
+            "尚未儲存的編輯內容將會遺失。是否繼續？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def replace_with_sprite_frames(self, images: List[QImage], source_path: Optional[Path] = None) -> None:
+        if not images:
+            return
+        self.frames = [
+            frame_from_qimage(image, f"sprite_frame_{index:04d}.png", source_path=source_path)
+            for index, image in enumerate(images, 1)
+        ]
+        self.current_index = 0
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self._export_size_initialized = False
+        self.last_spill_debug_stats = None
+        self._pending_frame_selection = [0]
+        self.canvas.clipboard_image = None
+        self.canvas.set_batch_selection_frames([], active=False)
+        self.canvas.set_debug_overlay(None)
+        if hasattr(self, "sync_selection_toggle"):
+            self.sync_selection_toggle.setChecked(False)
+        if source_path is not None:
+            self.remember_import_path(source_path)
+        self.after_project_changed(f"已拆分並匯入 {len(self.frames)} 個 Sprite frame")
 
     def import_video(self) -> None:
         if not self.confirm_video_import_switch():
@@ -2128,6 +2177,14 @@ def run() -> int:
         win.show()
         if video_dialog.import_images:
             win.add_video_frames(video_dialog.import_images)
+        return app.exec()
+    if startup.choice == StartupDialog.SPRITE:
+        sprite_dialog = SpriteImportDialog(image_filter=IMAGE_FILE_FILTER)
+        if sprite_dialog.exec() != QDialog.DialogCode.Accepted or not sprite_dialog.import_images:
+            return 0
+        win = MainWindow()
+        win.replace_with_sprite_frames(sprite_dialog.import_images, sprite_dialog.source_path)
+        win.show()
         return app.exec()
     win = MainWindow()
     win.show()

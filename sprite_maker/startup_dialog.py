@@ -7,12 +7,13 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLa
 class StartupDialog(QDialog):
     EDIT = "edit"
     VIDEO = "video"
+    SPRITE = "sprite"
 
     def __init__(self) -> None:
         super().__init__()
         self.choice = self.EDIT
         self.setWindowTitle("SpriteMaker PySide")
-        self.setFixedSize(520, 240)
+        self.setFixedSize(760, 240)
 
         title = QLabel("SpriteMaker PySide")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -29,8 +30,13 @@ class StartupDialog(QDialog):
         edit_button.setMinimumHeight(56)
         edit_button.clicked.connect(self.choose_edit)
 
+        sprite_button = QPushButton("匯入 Sprite 圖")
+        sprite_button.setMinimumHeight(56)
+        sprite_button.clicked.connect(self.choose_sprite)
+
         row = QHBoxLayout()
         row.addWidget(video_button)
+        row.addWidget(sprite_button)
         row.addWidget(edit_button)
 
         layout = QVBoxLayout(self)
@@ -47,4 +53,8 @@ class StartupDialog(QDialog):
 
     def choose_edit(self) -> None:
         self.choice = self.EDIT
+        self.accept()
+
+    def choose_sprite(self) -> None:
+        self.choice = self.SPRITE
         self.accept()
