@@ -11,6 +11,8 @@ env/
 # Packaging
 build/
 dist/
+build-*/
+dist-*/
 *.egg-info/
 *.spec
 

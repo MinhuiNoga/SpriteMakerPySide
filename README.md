@@ -2,21 +2,32 @@
 
 [繁體中文 README](README.zh-TW.md)
 
-SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor built with Python, PySide6, OpenCV, NumPy, and Pillow. It replaces a large single-file HTML workflow with a native app for drawing, layer editing, frame sequencing, video/GIF frame extraction, alpha/color cleanup, selected-color edge spill cleanup, animation preview, and spritesheet export.
+SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor built with Python, PySide6, OpenCV, NumPy, and Pillow. It replaces a large single-file HTML workflow with a native app for drawing, layer editing, frame sequencing, video/GIF frame extraction, spritesheet splitting and playback, alpha/color cleanup, selected-color edge spill cleanup, animation preview, and spritesheet export.
 
 ## Download
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-2.5.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [SpriteMakerPySide-3.0.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-2.5.0.exe
+SpriteMakerPySide-3.0.0.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 3.0.0
+
+- Adds **Import Sprite Sheet** as a third startup workflow and as a command in the editor's **File** menu.
+- Splits a sheet using configurable columns, rows, horizontal spacing, vertical spacing, and one outer margin applied to all four sides.
+- If the usable image dimensions are not evenly divisible by the grid, transparent pixels are added on the right and bottom instead of cropping source pixels.
+- Shows the calculated cell size, transparent padding, numbered grid preview, and a row-major thumbnail sequence.
+- All cells are checked by default. Unchecked cells receive a semi-transparent gray overlay and are excluded from playback and import.
+- Plays only checked cells with play/pause, loop, progress seeking, custom FPS, and `Ctrl + mouse wheel` preview zoom.
+- **Split Sprite Sheet** imports checked cells into the editor as `sprite_frame_0001.png`, `sprite_frame_0002.png`, and so on.
+- Importing from an existing editor project shows a destructive-action warning. The current project and undo/redo history are replaced only after a valid split is confirmed; cancelling or loading an invalid image leaves the project unchanged.
 
 ## What's New In 2.5.0
 
@@ -175,9 +186,10 @@ The release package includes Python, PySide6, OpenCV, and required runtime files
 
 ## Startup
 
-When the app opens, choose one of two workflows:
+When the app opens, choose one of three workflows:
 
 - **Import Video / GIF**: open the video or animated-GIF frame extraction workflow first.
+- **Import Sprite Sheet**: open the grid splitter, select cells, preview their animation, and import the checked cells into a new editor project.
 - **Enter Editor Mode**: open the sprite editor directly.
 
 From the video/GIF workflow, use **Switch to Editor Mode** to close the importer and enter an initialized editor. A confirmation warns that extracted frames are discarded; use **Import to Editor** when checked frames should be kept.
@@ -195,6 +207,20 @@ frame_2.png
 frame_10.png
 ```
 
+## Sprite Sheet Import
+
+Open the importer from the startup screen or choose **File > Import Sprite Sheet** in editor mode.
+
+1. Choose a supported image file.
+2. Set the grid's columns and rows.
+3. Set horizontal spacing, vertical spacing, and the shared outer margin when the sheet contains gaps around or between cells.
+4. Review the numbered grid. The information panel reports the source size, calculated per-cell size, and any transparent right/bottom padding.
+5. Check the cells to keep. Cells are ordered left to right, then top to bottom. Use **Select All**, **Select None**, or **Invert Selection** for batch changes.
+6. Preview the checked sequence with custom FPS, looping, and progress seeking. Use `Ctrl + mouse wheel` over either preview to zoom.
+7. Choose **Split Sprite Sheet** to replace the editor project with only the checked cells.
+
+Every cell has one consistent output size. When the source cannot be divided evenly, the importer expands the logical sheet with transparent pixels on the right and bottom. It never removes source pixels to force divisibility. From editor mode, the existing frames, layers, and undo/redo history are cleared only after the split is accepted successfully.
+
 ## Editor Workflow
 
 ### File Actions
@@ -205,6 +231,7 @@ The **File** toolbar menu contains:
 - **Insert** (`Ctrl+I`): insert images after the current frame.
 - **Clear**: clear the current project.
 - **Import Video / GIF**: switch from editor mode to the animation importer. A warning explains that the current editor project and history will be initialized; the switch only proceeds after confirmation.
+- **Import Sprite Sheet**: open the grid splitter. Confirming a valid split replaces the current project with the checked cells; cancelling keeps the current project unchanged.
 - **Save Current Frame** (`Ctrl+S`): export the current composited frame as PNG.
 - **Save ZIP**: export all frames in their current arranged order to a ZIP file, renamed sequentially as `video_frame_0001.png`, `video_frame_0002.png`, and so on.
 
