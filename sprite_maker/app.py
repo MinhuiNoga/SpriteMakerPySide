@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from .image_ops import add_outline, applyColorSpillCleanupToImageData, erase_color, qcolor_to_rgba, trim_alpha_edges
+from .alignment_dialog import FootAlignmentDialog
 from .models import Frame, Layer, clone_image, frame_from_image, frame_from_qimage, make_blank_image
 from .pixel_compression_dialog import PixelCompressionDialog
 from .sprite_import_dialog import SpriteImportDialog
@@ -51,33 +52,8 @@ from .widgets import CanvasWidget, FrameStripWidget
 from .workers import UniversalEraseWorker
 
 
-IMAGE_EXTENSION_ORDER = (
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".jpe",
-    ".jfif",
-    ".jif",
-    ".jfi",
-    ".bmp",
-    ".dib",
-    ".gif",
-    ".webp",
-    ".tif",
-    ".tiff",
-    ".tga",
-    ".ico",
-    ".icns",
-    ".pbm",
-    ".pgm",
-    ".ppm",
-    ".xbm",
-    ".xpm",
-    ".svg",
-    ".svgz",
-)
-IMAGE_EXTENSIONS = frozenset(IMAGE_EXTENSION_ORDER)
-IMAGE_FILE_FILTER = "支援的圖片 (" + " ".join(f"*{extension}" for extension in IMAGE_EXTENSION_ORDER) + ")"
+from .image_file_types import IMAGE_EXTENSION_ORDER, IMAGE_EXTENSIONS, IMAGE_FILE_FILTER
+
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm", ".mkv"}
 ANIMATION_EXTENSIONS = VIDEO_EXTENSIONS | {".gif"}
 
@@ -94,6 +70,7 @@ def sort_image_paths(paths: List[Path]) -> List[Path]:
 class ProjectState:
     frames: List[Frame]
     current_index: int
+    alignment_session: Optional[dict] = None
 
 
 def choose_fixed_color(initial: QColor, parent: QWidget, title: str, show_alpha: bool = False) -> QColor:
@@ -217,7 +194,7 @@ def scaled_export_thumbnail(frame: Frame, output_size: QSize, maximum_size: QSiz
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Sprite Maker PySide")
+        self.setWindowTitle("Sprite Maker PySide 3.3.0")
         self.resize(1440, 920)
 
         self.frames: List[Frame] = []
@@ -225,6 +202,7 @@ class MainWindow(QMainWindow):
         self.undo_stack: List[ProjectState] = []
         self.redo_stack: List[ProjectState] = []
         self.max_history = 30
+        self._alignment_session: Optional[dict] = None
         self.thread_pool = QThreadPool.globalInstance()
         self.color = QColor("#ff0000")
         self.tool_actions = {}
@@ -337,6 +315,16 @@ class MainWindow(QMainWindow):
         transparent_button.clicked.connect(self.set_transparent_color)
         settings_toolbar.addWidget(transparent_button)
 
+        self.consolidate_color_button = QPushButton("統一目標：取樣色")
+        self.consolidate_color_button.setToolTip("指定色塊統一後的顏色；不改變畫筆顏色，保留原像素透明度")
+        self.consolidate_color_button.clicked.connect(self.choose_consolidation_color)
+        self.consolidate_color_action = settings_toolbar.addWidget(self.consolidate_color_button)
+        self.consolidate_reset_button = QPushButton("使用取樣色")
+        self.consolidate_reset_button.clicked.connect(self.reset_consolidation_color)
+        self.consolidate_reset_action = settings_toolbar.addWidget(self.consolidate_reset_button)
+        self.consolidate_color_action.setVisible(False)
+        self.consolidate_reset_action.setVisible(False)
+
         settings_toolbar.addWidget(QLabel("筆刷"))
         self.brush_spin = QSpinBox()
         self.brush_spin.setRange(1, 100)
@@ -423,6 +411,7 @@ class MainWindow(QMainWindow):
         self.add_action(edit_toolbar, "垂直翻轉", lambda: self.canvas.flip_floating_selection(False), "Shift+H")
         self.add_action(edit_toolbar, "刪除選取", self.delete_selected_or_frame, "Del")
         self.add_action(edit_toolbar, "像素壓縮化", self.show_pixel_compression)
+        self.add_action(edit_toolbar, "腳底對齊", self.show_foot_alignment)
         edit_toolbar.addSeparator()
         edit_toolbar.addWidget(QLabel("變形品質"))
         self.transform_quality_combo = QComboBox()
@@ -744,6 +733,7 @@ class MainWindow(QMainWindow):
         if not paths:
             return
         self.frames = self.load_frames(paths)
+        self._alignment_session = None
         self.current_index = 0
         self.undo_stack.clear()
         self.redo_stack.clear()
@@ -794,6 +784,7 @@ class MainWindow(QMainWindow):
     def replace_with_sprite_frames(self, images: List[QImage], source_path: Optional[Path] = None) -> None:
         if not images:
             return
+        self._alignment_session = None
         self.frames = [
             frame_from_qimage(image, f"sprite_frame_{index:04d}.png", source_path=source_path)
             for index, image in enumerate(images, 1)
@@ -854,6 +845,7 @@ class MainWindow(QMainWindow):
 
     def reset_editor_for_video_import(self, exclude_dialog: Optional[QDialog] = None) -> None:
         self.close_editor_auxiliary_windows(exclude_dialog)
+        self._alignment_session = None
         self.frames.clear()
         self.current_index = 0
         self.undo_stack.clear()
@@ -953,8 +945,16 @@ class MainWindow(QMainWindow):
             self.update_synchronized_selection_targets()
             return
         self.canvas.commit_floating_selection()
+        preserve_region = self.sync_selection_toggle.isChecked() or (
+            self.canvas.tool == "color_consolidate" and len(self.selected_frame_rows()) > 1)
+        selection_rect = self.canvas.selection_rect if preserve_region else None
+        lasso_points = list(self.canvas.lasso_points) if preserve_region else []
+        sampled_color = self.canvas.color_consolidation_sample if preserve_region else None
         self.current_index = index
         self.canvas.set_frame(self.current_frame)
+        self.canvas.selection_rect = selection_rect
+        self.canvas.lasso_points = lasso_points
+        self.canvas.color_consolidation_sample = sampled_color
         self.update_synchronized_selection_targets()
         self.update_canvas_extent()
         self.refresh_layers()
@@ -974,6 +974,9 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "sync_selection_toggle"):
             return
         selected_rows = self.selected_frame_rows()
+        self.canvas.set_color_consolidation_frames(
+            [self.frames[row] for row in selected_rows] or ([self.current_frame] if self.current_frame else [])
+        )
         if not self.sync_selection_toggle.isChecked() or not self.frames:
             self.canvas.set_batch_selection_frames([], active=False)
             self.sync_selection_status.setText("範圍選取框：關閉")
@@ -1147,8 +1150,23 @@ class MainWindow(QMainWindow):
 
     def set_tool(self, tool: str) -> None:
         self.canvas.set_tool(tool)
+        self.consolidate_color_action.setVisible(tool == "color_consolidate")
+        self.consolidate_reset_action.setVisible(tool == "color_consolidate")
         if tool in self.tool_actions:
             self.tool_actions[tool].setChecked(True)
+
+    def choose_consolidation_color(self) -> None:
+        initial = self.canvas.color_consolidation_target or self.canvas.color_consolidation_sample or self.color
+        color = choose_fixed_color(initial, self, "色塊統一：指定目標顏色", show_alpha=False)
+        if color.isValid():
+            self.canvas.set_color_consolidation_target(color)
+            self.consolidate_color_button.setText(f"統一目標：{color.name().upper()}")
+            self.canvas.setFocus()
+
+    def reset_consolidation_color(self) -> None:
+        self.canvas.set_color_consolidation_target(None)
+        self.consolidate_color_button.setText("統一目標：取樣色")
+        self.canvas.setFocus()
 
     def choose_color(self) -> None:
         color = choose_fixed_color(self.color, self, "選擇顏色", show_alpha=True)
@@ -1498,6 +1516,37 @@ class MainWindow(QMainWindow):
             self.update_canvas_extent()
             self.status.showMessage(f"全域輸出尺寸：{self.export_width_spin.value()} x {self.export_height_spin.value()}")
 
+    def show_foot_alignment(self) -> None:
+        if not self.frames:
+            self.status.showMessage("請先匯入影格再使用腳底對齊")
+            return
+        self.canvas.commit_floating_selection()
+        source_frames = list(self.frames)
+        dialog = FootAlignmentDialog(self.frames, self.export_size(), self.current_index, self, session=self._alignment_session)
+        result = dialog.exec()
+        dialog.deleteLater()
+        if result != QDialog.DialogCode.Accepted:
+            return
+        if len(source_frames) != len(self.frames) or any(a is not b for a, b in zip(source_frames, self.frames)):
+            self.status.showMessage("專案影格已被其他處理更新，請重新開啟腳底對齊")
+            return
+        changes = [
+            (frame, staged)
+            for frame, staged in zip(self.frames, dialog.frames)
+            if (frame.export_center, frame.alignment_origin, frame.alignment_anchor) !=
+               (staged.export_center, staged.alignment_origin, staged.alignment_anchor)
+        ]
+        if not changes:
+            self._alignment_session = dialog.session_snapshot()
+            return
+        self.push_undo()
+        for frame, staged in changes:
+            frame.export_center_x, frame.export_center_y = staged.export_center
+            frame.alignment_origin = staged.alignment_origin
+            frame.alignment_anchor = staged.alignment_anchor
+        self._alignment_session = dialog.session_snapshot()
+        self.after_project_changed(f"已套用腳底對齊（{len(changes)} 格，可一次復原）")
+
     def export_frame_image(self, frame: Frame) -> QImage:
         size = self.export_size()
         center_x, center_y = frame.export_center
@@ -1526,10 +1575,12 @@ class MainWindow(QMainWindow):
         self.restore_project_state(self.redo_stack.pop(), "已重做")
 
     def capture_project_state(self) -> ProjectState:
-        return ProjectState(frames=[frame.clone() for frame in self.frames], current_index=self.current_index)
+        return ProjectState(frames=[frame.clone() for frame in self.frames], current_index=self.current_index,
+                            alignment_session=self._alignment_session)
 
     def restore_project_state(self, state: ProjectState, message: str) -> None:
         self.frames = [frame.clone() for frame in state.frames]
+        self._alignment_session = state.alignment_session
         self.current_index = max(0, min(state.current_index, len(self.frames) - 1)) if self.frames else 0
         self.after_project_changed(message)
 
@@ -1702,6 +1753,12 @@ class MainWindow(QMainWindow):
                 layer.image = expanded
             frame.export_center_x = center_x + left
             frame.export_center_y = center_y + top
+            if frame.alignment_origin is not None:
+                ox, oy = frame.alignment_origin
+                frame.alignment_origin = (ox + left, oy + top)
+            if frame.alignment_anchor is not None:
+                ax, ay = frame.alignment_anchor
+                frame.alignment_anchor = (ax + left, ay + top)
             frame.mark_dirty()
 
         self.canvas.shift_workspace_coordinates(left, top)
@@ -1722,6 +1779,12 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.close_editor_auxiliary_windows()
+        self._alignment_session = None
+        for frame in self.frames:
+            frame.alignment_origin = None
+            frame.alignment_anchor = None
+        self.undo_stack.clear()
+        self.redo_stack.clear()
         super().closeEvent(event)
 
     def schedule_thumbnail_refresh(self) -> None:
@@ -1771,7 +1834,7 @@ class MainWindow(QMainWindow):
     def update_ui(self) -> None:
         count = len(self.frames)
         current = self.current_index + 1 if count else 0
-        self.setWindowTitle(f"Sprite Maker PySide - {current}/{count}")
+        self.setWindowTitle(f"Sprite Maker PySide 3.3.0 - {current}/{count}")
 
     def copy_name(self, name: str) -> str:
         path = Path(name)
@@ -2164,6 +2227,7 @@ class SpritesheetPreviewDialog(QDialog):
 def run() -> int:
     app = QApplication([])
     app.setApplicationName("Sprite Maker PySide")
+    app.setApplicationVersion("3.3.0")
     startup = StartupDialog()
     if startup.exec() != QDialog.DialogCode.Accepted:
         return 0

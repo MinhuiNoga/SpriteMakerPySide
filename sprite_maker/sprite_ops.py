@@ -16,9 +16,12 @@ MAX_SPRITE_CELLS = 4096
 class SpriteSheetLayout:
     columns: int
     rows: int
+    grid_x: int
+    grid_y: int
+    grid_width: int
+    grid_height: int
     horizontal_spacing: int = 0
     vertical_spacing: int = 0
-    outer_margin: int = 0
 
     @property
     def cell_count(self) -> int:
@@ -41,39 +44,34 @@ def calculate_sprite_geometry(image: QImage, layout: SpriteSheetLayout) -> Sprit
         raise ValueError("Columns and rows must be at least 1.")
     if layout.cell_count > MAX_SPRITE_CELLS:
         raise ValueError(f"Sprite sheet cannot exceed {MAX_SPRITE_CELLS} cells.")
-    if layout.horizontal_spacing < 0 or layout.vertical_spacing < 0 or layout.outer_margin < 0:
-        raise ValueError("Spacing and outer margin cannot be negative.")
-
-    content_width = image.width() - layout.outer_margin * 2
-    content_height = image.height() - layout.outer_margin * 2
+    if layout.grid_width < 1 or layout.grid_height < 1:
+        raise ValueError("Grid dimensions must be positive.")
+    content_width = layout.grid_width
+    content_height = layout.grid_height
     sprite_width = content_width - layout.horizontal_spacing * (layout.columns - 1)
     sprite_height = content_height - layout.vertical_spacing * (layout.rows - 1)
-    if sprite_width < 1 or sprite_height < 1:
-        raise ValueError("Margins and spacing leave no usable sprite pixels.")
+    if sprite_width < layout.columns or sprite_height < layout.rows:
+        raise ValueError("Grid and separation leave no usable sprite pixels (minimum 1 px per cell).")
 
     cell_width = (sprite_width + layout.columns - 1) // layout.columns
     cell_height = (sprite_height + layout.rows - 1) // layout.rows
-    padded_width = (
-        layout.outer_margin * 2
-        + cell_width * layout.columns
-        + layout.horizontal_spacing * (layout.columns - 1)
-    )
-    padded_height = (
-        layout.outer_margin * 2
-        + cell_height * layout.rows
-        + layout.vertical_spacing * (layout.rows - 1)
-    )
+    if layout.columns > 1 and sprite_width // layout.columns + layout.horizontal_spacing < 1:
+        raise ValueError("Horizontal spacing leaves no forward step between sprite cells.")
+    if layout.rows > 1 and sprite_height // layout.rows + layout.vertical_spacing < 1:
+        raise ValueError("Vertical spacing leaves no forward step between sprite cells.")
+    if cell_width * cell_height * layout.cell_count > 64 * 1024 * 1024:
+        raise ValueError("Expanded grid exceeds the 64 megapixel output limit.")
     return SpriteSheetGeometry(
         cell_size=QSize(cell_width, cell_height),
-        padded_size=QSize(padded_width, padded_height),
+        padded_size=image.size(),
         source_content_rect=QRect(
-            layout.outer_margin,
-            layout.outer_margin,
+            layout.grid_x,
+            layout.grid_y,
             content_width,
             content_height,
-        ),
-        padding_right=padded_width - image.width(),
-        padding_bottom=padded_height - image.height(),
+        ).intersected(image.rect()),
+        padding_right=cell_width * layout.columns - sprite_width,
+        padding_bottom=cell_height * layout.rows - sprite_height,
     )
 
 
@@ -82,9 +80,16 @@ def sprite_cell_rect(layout: SpriteSheetLayout, geometry: SpriteSheetGeometry, i
         raise IndexError("Sprite cell index out of range.")
     column = index % layout.columns
     row = index // layout.columns
-    x = layout.outer_margin + column * (geometry.cell_size.width() + layout.horizontal_spacing)
-    y = layout.outer_margin + row * (geometry.cell_size.height() + layout.vertical_spacing)
-    return QRect(x, y, geometry.cell_size.width(), geometry.cell_size.height())
+    # Distribute integer remainders across cells, never across the grid boundary.
+    def axis(start: int, extent: int, count: int, gap: int, cell: int):
+        usable = extent - gap * (count - 1)
+        left = (cell * usable + count - 1) // count
+        right = ((cell + 1) * usable + count - 1) // count
+        return start + left + cell * gap, right - left
+
+    x, width = axis(layout.grid_x, layout.grid_width, layout.columns, layout.horizontal_spacing, column)
+    y, height = axis(layout.grid_y, layout.grid_height, layout.rows, layout.vertical_spacing, row)
+    return QRect(x, y, width, height)
 
 
 def padded_spritesheet_image(image: QImage, geometry: SpriteSheetGeometry) -> QImage:

@@ -8,15 +8,69 @@ SpriteMaker PySide is a local Windows desktop sprite and frame-matting editor bu
 
 Download the packaged Windows build from GitHub Releases:
 
-- [SpriteMakerPySide-3.0.0-win64.zip](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
+- [GitHub Releases (published builds)](https://github.com/MinhuiNoga/SpriteMakerPySide/releases/latest)
 
 Unzip it, then run:
 
 ```text
-SpriteMakerPySide-3.0.0.exe
+SpriteMakerPySide-3.3.0.exe
 ```
 
 The release package includes Python, PySide6, OpenCV, and required runtime files. Users do not need to install Python to run the packaged app.
+
+## What's New In 3.3.0
+
+- Fixes missing red previews after selecting multiple frames. Color Consolidation uses the selected frame list directly, supports entire active layers without a region, and preserves the region and source-color preview when switching frames during range selection or batch consolidation.
+- **Batch Color Consolidation**: enable synchronized range selection, select multiple frames, then draw a rectangle or lasso. Consolidation edits matching pixels only inside that region on each selected frame's active layer. One Undo/Redo covers the entire batch.
+- **Independent target color**: the Color Consolidation tool exposes a target color picker and a reset-to-sampled-color button. Resampling the source does not overwrite the custom target or change the drawing palette.
+- The current frame shows the red match overlay; status reports batch counts, source/target colors and total changed pixels. Enter applies and Escape cancels; tolerance and target changes refresh the preview.
+- Original alpha, transparent pixels, unselected frames, other layers and out-of-region pixels remain unchanged. Both single and multiple frames use the selected region when present, otherwise the entire active layer. Batch Color Consolidation follows selected thumbnails independently of the synchronized-selection toggle.
+
+## What's New In 3.2.2
+
+- Drop local images into sprite import to load and split them automatically, using the same image format list as the editor.
+- Drops work over previews, thumbnails, and settings. Multiple files use the first supported image.
+- Existing loading and splitting paths are reused. Invalid images preserve the current sheet; directories, remote URLs, and non-images are rejected. Successfully loading a new image stops old playback and returns to the first frame.
+
+## What's New In 3.2.1
+
+- Sprite import now supports minimize, maximize/restore, a window resize grip, and F11 fullscreen. Escape exits fullscreen and restores the prior window state. Grid and background settings use collapsible tabs to free preview space.
+
+- Extend the yellow grid beyond any source edge. Grid X/Y can be negative and grid dimensions can exceed the image.
+- Expanded areas display as a transparency checkerboard and export as transparent pixels. Original pixels retain their size and position; cells redistribute across the new grid.
+- The view transform stays fixed during dragging and the preview canvas expands on release. Entirely outside cells are EMPTY; empty ratios include transparent extension pixels.
+- Keeps the vertical preview height divider. Total output is limited to 64 megapixels to avoid accidental oversized allocations.
+
+## What's New In 3.2.0
+
+- Sprite import now uses **Grid X / Y / Width / Height + Columns / Rows**. Changing grid dimensions redistributes every cell; Separation X / Y lives under Advanced, including existing negative overlap support.
+- Drag the grid interior, edges, or corners with two-way numeric control updates. The grid stays inside the source and cells remain at least 1 × 1 px. Thumbnails rebuild on release.
+- **Auto Detect Grid** supports transparent, green, blue, and custom color backgrounds, with alpha threshold, RGB distance tolerance, confidence, and warnings.
+- Every split classifies **EMPTY** cells with the shared background mask (default foreground threshold: 0.10%). Empty cells retain their indices, start unchecked, and can be checked manually.
+- Non-divisible cells receive individual transparent output padding without expanding the grid. Selection, animation, FPS, looping, zoom, and editor import remain available.
+
+Detection fits background projections to regular separator positions. Confidence describes fit quality, not a calibrated probability. Sheets without regular gaps, wholly empty rows/columns, repeated internal holes, or invisible per-frame padding can be ambiguous. Unknown axes preserve manual settings; adjust the grid after detection. Color mode classifies backgrounds but does not remove their color from imported frames.
+
+## What's New In 3.1.0
+
+- Adds **腳底對齊** (Foot Alignment) to the editor: choose a reference frame, click its planted foot, then click the corresponding anchor in each frame, or use automatic silhouette-based anchors.
+- Automatic anchoring supports the current frame or all frames and screen-left foot, screen-right foot, or midpoint. With no reference, the current frame becomes the reference. Batch mode preserves existing anchors by default; uncheck that option to replace them.
+- Applied cumulative offsets (such as `-168 px`), anchors, the frozen reference, and panel settings survive reopening the alignment dialog. The records are memory-only and clear on leaving the editor, closing the app, or replacing the entire project.
+- A frozen reference overlay, ground guides, anchor crosshair, adjustable opacity/zoom, and FPS playback help compare frames. Integer X/Y controls move the whole character; positive values move right/down.
+- Align both axes or height only. Preserve intentional movement during running, stepping, or jumping rather than pinning every lifted foot to the ground.
+- Changes are staged until **套用所有調整** (Apply all); Cancel discards them, and one Undo/Redo restores/reapplies the whole operation. Original layer pixels remain intact. PNG, ZIP, animation, and sheet export share the output centers.
+- Warns when visible pixels extend outside the output frame. Increase output W/H in the editor before exporting to preserve sword tips, hats, and other content.
+
+Select a frame and press **設此格為參考，再點腳底** before clicking the reference foot. Switch frames and click the matching point, then fine-tune X/Y and play the sequence. Yellow guides mark the reference; cyan marks the current anchor. **重設目前格** resets the current frame's cumulative offset to zero, using its first alignment baseline in this editor session. Reopening does not reset values or apply them twice. A new reference affects subsequent clicks only. Cancel discards only the current draft; previously applied records remain. Frame reorder, cloning, workspace expansion, and undo/redo preserve the corresponding metadata.
+
+Automatic points estimate contact positions from the lower transparent silhouette, filtering faint alpha fringes and small disconnected specks. This is not semantic foot recognition: capes, low weapons, and shadows may affect the estimate. Blank frames, opaque backgrounds, and frames without a usable silhouette are skipped with a message. Review playback and correct points manually as needed.
+
+Keep the packaged `_internal` folder beside the EXE when distributing or running the Windows build.
+
+## What's New In 3.0.1
+
+- Horizontal and vertical spacing in Sprite sheet import now accept negative values, with matching preview and split results for overlapping cells.
+- Negative spacing that would prevent cells from advancing right or down is rejected instead of producing invalid cuts.
 
 ## What's New In 3.0.0
 
@@ -212,14 +266,14 @@ frame_10.png
 Open the importer from the startup screen or choose **File > Import Sprite Sheet** in editor mode.
 
 1. Choose a supported image file.
-2. Set the grid's columns and rows.
-3. Set horizontal spacing, vertical spacing, and the shared outer margin when the sheet contains gaps around or between cells.
+2. Choose a Background mode and thresholds, then press **Auto Detect Grid**, or set Columns, Rows, Grid X / Y / Width / Height manually.
+3. Drag the grid interior to move it, or an edge/corner to resize it. Advanced Separation X / Y describes real source gaps or negative overlap.
 4. Review the numbered grid. The information panel reports the source size, calculated per-cell size, and any transparent right/bottom padding.
-5. Check the cells to keep. Cells are ordered left to right, then top to bottom. Use **Select All**, **Select None**, or **Invert Selection** for batch changes.
+5. Check the cells to keep. EMPTY cells start unchecked but can be checked manually. Cells are ordered left to right, then top to bottom. Use **Select All**, **Select None**, or **Invert Selection** for batch changes.
 6. Preview the checked sequence with custom FPS, looping, and progress seeking. Use `Ctrl + mouse wheel` over either preview to zoom.
 7. Choose **Split Sprite Sheet** to replace the editor project with only the checked cells.
 
-Every cell has one consistent output size. When the source cannot be divided evenly, the importer expands the logical sheet with transparent pixels on the right and bottom. It never removes source pixels to force divisibility. From editor mode, the existing frames, layers, and undo/redo history are cleared only after the split is accepted successfully.
+Every cell has one consistent output size. When usable grid dimensions cannot be divided evenly, integer remainders are distributed across source cells and smaller output cells receive transparent right/bottom padding. The grid does not automatically expand or sample pixels outside its rectangle. Manually extend the grid beyond the source to add transparent output pixels. From editor mode, the existing frames, layers, and undo/redo history are cleared only after the split is accepted successfully.
 
 ## Editor Workflow
 
@@ -335,11 +389,11 @@ Use **Pixel Compression** on the editor toolbar to create a lower-resolution pix
 Use **Color Consolidation** to remove small near-duplicate color variations produced by diffusion-based image generation:
 
 1. Optionally create a rectangular or lasso selection around the part to clean.
-2. Select **Color Consolidation**, then click the correct color that should be retained.
+2. Select **Color Consolidation**, then click the source color to match. Use **統一目標** to choose a separate replacement RGB, or **使用取樣色** to retain the sampled-color target.
 3. Adjust the existing toolbar tolerance if needed. The red overlay updates immediately.
 4. Press `Enter` to replace every matched RGB value with the sampled RGB, or `Esc` to cancel.
 
-Unlike Paint Bucket, Color Consolidation does not require matching pixels to be connected. It scans the full selection, or the entire active layer when there is no selection. Every pixel is compared directly with the original sampled color, so tolerance cannot spread progressively through a gradient. Fully transparent pixels are ignored; visible and semitransparent pixels retain their original alpha values.
+Unlike Paint Bucket, Color Consolidation does not require matching pixels to be connected. With synchronized range selection enabled, select multiple frames before drawing the region to process that same region on each active layer. A single frame without a region still processes its entire active layer. Every pixel is compared directly with the original sampled color, so tolerance cannot spread progressively through a gradient. Fully transparent pixels are ignored; visible and semitransparent pixels retain their original alpha values.
 
 ### Tools
 
@@ -552,6 +606,8 @@ Install dependencies first, then run:
 ```powershell
 .\build_exe.ps1
 ```
+
+The packaging script reads the version from `pyproject.toml` to name the EXE and ZIP, and always uses the root-level `main.ico` as the EXE icon.
 
 Generated build outputs are ignored by Git.
 

@@ -157,6 +157,8 @@ class CanvasWidget(QWidget):
         self.debug_overlay_image: Optional[QImage] = None
         self.color_consolidation_overlay_image: Optional[QImage] = None
         self.color_consolidation_sample: Optional[QColor] = None
+        self.color_consolidation_target: Optional[QColor] = None
+        self.color_consolidation_frames: Optional[List[Frame]] = None
         self.color_consolidation_stats: Optional[dict] = None
         self._drawing = False
         self._last_pos: Optional[QPoint] = None
@@ -224,6 +226,8 @@ class CanvasWidget(QWidget):
                 unique_frames.append(frame)
         self.batch_selection_active = active
         self.batch_selection_frames = unique_frames
+        if self.color_consolidation_sample is not None and self.color_consolidation_frames is None:
+            self.refresh_color_consolidation_preview()
 
     def selection_target_frames(self) -> List[Frame]:
         if not self.frame:
@@ -266,7 +270,7 @@ class CanvasWidget(QWidget):
         self.tool = tool
         self._update_cursor()
         if tool == "color_consolidate":
-            self.status_changed.emit("色塊統一：點擊目前圖層中要保留的標準色")
+            self.status_changed.emit("色塊統一：點擊來源色，可另選統一目標色；Enter 套用 / Esc 取消")
         else:
             self.status_changed.emit(f"工具：{tool}")
 
@@ -1055,12 +1059,13 @@ class CanvasWidget(QWidget):
             self.selection_rect is not None and not self.selection_rect.isNull()
         ) or len(self.lasso_points) >= 3
 
-    def selection_mask_image(self) -> Optional[QImage]:
+    def selection_mask_image(self, target_frame: Optional[Frame] = None) -> Optional[QImage]:
         """Return the rectangular or lasso selection as an image-sized mask."""
         if not self.frame or not self.has_active_selection():
             return None
 
-        mask = QImage(self.frame.width, self.frame.height, QImage.Format.Format_RGBA8888)
+        frame = target_frame if target_frame is not None else self.frame
+        mask = QImage(frame.width, frame.height, QImage.Format.Format_RGBA8888)
         mask.fill(Qt.GlobalColor.transparent)
         painter = QPainter(mask)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
@@ -1069,7 +1074,7 @@ class CanvasWidget(QWidget):
         if len(self.lasso_points) >= 3:
             painter.drawPath(self._lasso_path(QPoint(0, 0)))
         elif self.selection_rect is not None:
-            painter.drawRect(self._selection_bounds())
+            painter.drawRect(self.selection_rect.normalized().intersected(mask.rect()))
         painter.end()
         return mask
 
@@ -1120,24 +1125,51 @@ class CanvasWidget(QWidget):
             self.status_changed.emit("色塊統一只從目前圖層的可見像素取樣")
             return
         self.color_consolidation_sample = QColor(color)
-        self.color = QColor(color)
-        self.color_sampled.emit(QColor(color))
         self.refresh_color_consolidation_preview()
+
+    def set_color_consolidation_target(self, color: Optional[QColor]) -> None:
+        self.color_consolidation_target = QColor(color) if color is not None else None
+        if self.color_consolidation_sample is not None:
+            self.refresh_color_consolidation_preview()
+
+    def set_color_consolidation_frames(self, frames: List[Frame]) -> None:
+        self.color_consolidation_frames = list(frames)
+        if self.color_consolidation_sample is not None:
+            self.refresh_color_consolidation_preview()
+
+    def _color_consolidation_results(self):
+        targets = (self.color_consolidation_frames if self.color_consolidation_frames is not None
+                   else self.selection_target_frames())
+        for frame in targets:
+            result, overlay, stats = consolidate_similar_colors(
+                frame.active_layer.image, self.color_consolidation_sample, self.tolerance,
+                self.selection_mask_image(frame), self.color_consolidation_target,
+            )
+            yield frame, result, overlay, stats
 
     def refresh_color_consolidation_preview(self) -> bool:
         if not self.frame or self.color_consolidation_sample is None:
             return False
-        _, overlay, stats = consolidate_similar_colors(
-            self.frame.active_layer.image,
-            self.color_consolidation_sample,
-            self.tolerance,
-            self.selection_mask_image(),
-        )
-        self.color_consolidation_overlay_image = overlay
+        self.color_consolidation_overlay_image = None
+        stats = None
+        count = matched = changed = 0
+        for frame, _, overlay, frame_stats in self._color_consolidation_results():
+            count += 1
+            matched += frame_stats["matchedPixelCount"]
+            changed += frame_stats["changedPixelCount"]
+            stats = dict(frame_stats)
+            if frame is self.frame:
+                self.color_consolidation_overlay_image = overlay
+        if stats is None:
+            self.color_consolidation_stats = None
+            self.status_changed.emit("請選取要進行色塊統一的 Frame")
+            self.update()
+            return False
+        stats.update(frameCount=count, matchedPixelCount=matched, changedPixelCount=changed)
         self.color_consolidation_stats = stats
         scope = "選取範圍" if stats["selectionApplied"] else "完整圖層"
         self.status_changed.emit(
-            f"色塊統一預覽：{scope}，標準色 {stats['sampledColor']}，"
+            f"色塊統一預覽：{count} 幀的{scope}，來源 {stats['sampledColor']} → 目標 {stats['targetColor']}，"
             f"容差 {stats['tolerance']}，命中 {stats['matchedPixelCount']}，"
             f"將變更 {stats['changedPixelCount']} pixel；Enter 套用 / Esc 取消"
         )
@@ -1146,25 +1178,24 @@ class CanvasWidget(QWidget):
 
     def apply_color_consolidation(self) -> bool:
         if not self.frame or self.color_consolidation_sample is None:
-            self.status_changed.emit("請先點擊目前圖層中要保留的標準色")
+            self.status_changed.emit("請先點擊目前圖層中的來源色")
             return False
-        result, _, stats = consolidate_similar_colors(
-            self.frame.active_layer.image,
-            self.color_consolidation_sample,
-            self.tolerance,
-            self.selection_mask_image(),
-        )
-        if stats["changedPixelCount"] <= 0:
-            self.status_changed.emit("目前容差內沒有需要統一的近似色")
+        changes = [(frame, result, stats) for frame, result, _, stats in self._color_consolidation_results()
+                   if stats["changedPixelCount"] > 0]
+        if not changes:
+            self.status_changed.emit("沒有需要變更的像素；請確認 Frame、選取範圍與顏色容差")
             return False
 
         self.editing_started.emit()
-        self.frame.active_layer.image = result
-        self.frame.mark_dirty()
+        for frame, result, _ in changes:
+            frame.active_layer.image = result
+            frame.mark_dirty()
+        stats = changes[0][2]
+        changed = sum(item[2]["changedPixelCount"] for item in changes)
         self._clear_color_consolidation_preview()
         scope = "選取範圍" if stats["selectionApplied"] else "完整圖層"
         self._finish_edit(
-            f"已統一{scope}內 {stats['changedPixelCount']} 個 pixel 為 {stats['sampledColor']}"
+            f"已統一 {len(changes)} 幀{scope}內 {changed} 個 pixel 為 {stats['targetColor']}"
         )
         return True
 

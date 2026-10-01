@@ -788,8 +788,9 @@ def consolidate_similar_colors(
     sampled_color: QColor,
     tolerance: int,
     selection_mask_image: Optional[QImage] = None,
+    target_color: Optional[QColor] = None,
 ) -> Tuple[QImage, QImage, dict]:
-    """Collapse all selected nontransparent pixels near sampled_color to its RGB."""
+    """Match sampled RGB, replace with independent target RGB, preserving alpha."""
     arr = qimage_to_array(image)
     height, width, _ = arr.shape
     selection_mask, selection_applied = option_selection_mask(
@@ -810,15 +811,18 @@ def consolidate_similar_colors(
         & (arr[:, :, 3] > 0)
         & selection_mask
     )
-    changed_mask = match_mask & np.any(arr[:, :, :3] != sampled_rgb, axis=2)
+    target = sampled_color if target_color is None else target_color
+    target_rgb = np.array([target.red(), target.green(), target.blue()], dtype=np.uint8)
+    changed_mask = match_mask & np.any(arr[:, :, :3] != target_rgb, axis=2)
 
     result = arr.copy()
-    result[match_mask, :3] = sampled_rgb.astype(np.uint8)
+    result[match_mask, :3] = target_rgb
 
     overlay = np.zeros((height, width, 4), dtype=np.uint8)
     overlay[match_mask] = np.array([255, 32, 32, 136], dtype=np.uint8)
     stats = {
         "sampledColor": sampled_color.name().upper(),
+        "targetColor": target.name().upper(),
         "tolerance": tolerance,
         "selectionApplied": selection_applied,
         "scopePixelCount": int(np.count_nonzero(selection_mask)),

@@ -45,6 +45,9 @@ class Frame:
     source_path: Optional[Path] = None
     export_center_x: Optional[float] = None
     export_center_y: Optional[float] = None
+    # Editor-session metadata only; follows frames through reorder/undo/clone.
+    alignment_origin: Optional[tuple[float, float]] = None
+    alignment_anchor: Optional[tuple[int, int]] = None
     _composite_cache: Optional[QImage] = field(default=None, init=False, repr=False)
     _dirty: bool = field(default=True, init=False, repr=False)
 
@@ -97,6 +100,8 @@ class Frame:
             source_path=self.source_path,
             export_center_x=self.export_center_x,
             export_center_y=self.export_center_y,
+            alignment_origin=self.alignment_origin,
+            alignment_anchor=self.alignment_anchor,
         )
         cloned.mark_dirty()
         return cloned

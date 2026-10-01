@@ -12,10 +12,10 @@ class StartupDialog(QDialog):
     def __init__(self) -> None:
         super().__init__()
         self.choice = self.EDIT
-        self.setWindowTitle("SpriteMaker PySide")
+        self.setWindowTitle("SpriteMaker PySide 3.3.0")
         self.setFixedSize(760, 240)
 
-        title = QLabel("SpriteMaker PySide")
+        title = QLabel("SpriteMaker PySide 3.3.0")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet("font-size: 24px; font-weight: 700;")
 
