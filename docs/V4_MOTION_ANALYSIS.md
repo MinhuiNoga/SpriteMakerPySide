@@ -19,7 +19,7 @@
 8. Save a `project.json` file to preserve the non-destructive curation state.
 9. Export `animation.json` for the game runtime.
 
-If frame selection changes after a combat timeline has been created, the old combat metadata is invalidated intentionally. This prevents phase and hit-frame indices from silently drifting onto the wrong images.
+If frame selection changes after a combat timeline has been created, the old combat metadata is invalidated intentionally. This prevents phase and hit-frame indices from silently drifting onto the wrong images. Programmatic thumbnail or badge refreshes are explicitly excluded from this invalidation path.
 
 ## Motion detectors
 
@@ -100,4 +100,4 @@ Every entry in `frames` maps the runtime output frame back to its extraction ind
 
 ## Compatibility
 
-The original `VideoImportDialog` remains unchanged. 4.0.1 installs `VideoImportDialogV4` during application bootstrap, so the 3.x importer is still isolated from the extension layer. Existing foot alignment, editor import, sprite-sheet generation, color tools, and image editing code are not replaced by the 4.0.1 timing system.
+The original `VideoImportDialog` remains unchanged. 4.0.1 installs `VideoImportDialogV401` during application bootstrap. `VideoImportDialogV401` layers integration guards over the 4.x feature dialog so programmatic QListWidget badge/thumbnail updates cannot be mistaken for user frame-selection edits. The 3.x importer remains isolated, and existing foot alignment, editor import, sprite-sheet generation, color tools, and image editing code are not replaced by the 4.0.1 timing system.
