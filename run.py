@@ -1,4 +1,6 @@
-from sprite_maker.app import run
+import sprite_maker.app as app
+from sprite_maker.bootstrap_v4 import install
 
 
-raise SystemExit(run())
+install(app)
+raise SystemExit(app.run())
