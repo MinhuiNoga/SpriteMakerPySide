@@ -15,9 +15,22 @@ if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) {
     throw "Required application icon not found: $iconPath"
 }
 
-$python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
-if (-not (Test-Path -LiteralPath $python)) {
-    $python = "py"
+# Prefer the repository virtual environment. When it is absent (for example in
+# GitHub Actions after actions/setup-python), use the active python on PATH
+# instead of the Windows `py` launcher, which may select a different Python
+# installation that does not contain PyInstaller.
+$venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+$pythonArgs = @()
+if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
+    $python = $venvPython
+} else {
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if ($pythonCommand) {
+        $python = $pythonCommand.Source
+    } else {
+        $python = "py"
+        $pythonArgs = @("-3")
+    }
 }
 
 $versionParts = $version.Split('.')
@@ -37,7 +50,7 @@ VSVersionInfo(
 )
 "@ | Set-Content -LiteralPath $versionFile -Encoding utf8
 
-& $python -m PyInstaller --noconfirm --clean --windowed --icon $iconPath --version-file $versionFile --name $appName run.py
+& $python @pythonArgs -m PyInstaller --noconfirm --clean --windowed --icon $iconPath --version-file $versionFile --name $appName run.py
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
