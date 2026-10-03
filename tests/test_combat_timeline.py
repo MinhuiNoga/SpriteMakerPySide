@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication
 from sprite_maker.combat_timeline import CombatTimeline, build_animation_manifest, suggest_combat_timeline
 from sprite_maker.models import make_blank_image
 from sprite_maker.video_import_dialog import ExtractedVideoFrame
-from sprite_maker.video_import_v4 import VideoImportDialogV4
+from sprite_maker.video_import_v401 import VideoImportDialogV401
 
 
 def motion_frame(x: int, width: int = 96, height: int = 64):
@@ -68,7 +68,7 @@ class CombatTimelineDialogTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
-        self.dialog = VideoImportDialogV4()
+        self.dialog = VideoImportDialogV401()
         frames = []
         for index, x in enumerate((8, 8, 10, 18, 36, 48, 50, 50)):
             frames.append(
