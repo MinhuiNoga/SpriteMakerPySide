@@ -1,4 +1,6 @@
-from .app import run
+from . import app
+from .bootstrap_v4 import install
 
 
-raise SystemExit(run())
+install(app)
+raise SystemExit(app.run())
