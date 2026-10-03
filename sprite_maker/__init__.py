@@ -10,5 +10,6 @@ __all__ = [
     "motion_analysis",
     "combat_timeline",
     "video_import_v4",
+    "video_import_v401",
     "bootstrap_v4",
 ]
