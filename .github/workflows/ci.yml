@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main", "4.0.1"]
 
+concurrency:
+  group: sprite-maker-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     runs-on: ubuntu-latest
